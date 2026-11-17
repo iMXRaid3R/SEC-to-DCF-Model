@@ -1,0 +1,15 @@
+# Runs the offline tests (saved SEC fixtures, no network, no Excel) on every push and pull request.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Offline tests
+        run: uv run --python 3.12 --with pytest --with requests --with pandas --with openpyxl pytest tests/test_model.py -q

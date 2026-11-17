@@ -359,3 +359,68 @@ def test_writeup_renders_the_page():
     assert "| **Midpoint of the two** | **$90.00** | **$120.00** | **$160.00** |" in md
     assert "Probability-weighted value: $122.50" in md and "| Revenue | 5,000 | 6,000 |" in md
     assert "## Thesis" in md and "- It compounds." in md and "## Risks and what would change my mind" in md
+
+
+# ---- what changed since the last build ------------------------------------------
+def _filed_by(facts, cutoff):
+    """The company facts as they stood on `cutoff`: everything filed later is dropped."""
+    import copy
+    f = copy.deepcopy(facts)
+    for ns in f["facts"].values():
+        for tag in ns.values():
+            for unit in tag["units"]:
+                tag["units"][unit] = [x for x in tag["units"][unit] if x["filed"] <= cutoff]
+    return f
+
+
+def test_change_report_after_a_new_quarter(fins, tmp_path, capsys):
+    from datetime import date
+    from edgar import changes as ch
+    new = fins["ISRG"]
+    filed = max(r for r in new.sources["Filed"])
+    facts = load_json(FIXTURES / "ISRG.json.gz")
+    old = load_financials(_filed_by(facts, str(filed - pd.Timedelta(days=1))[:10]), "ISRG", "Intuitive Surgical")
+    assert old.ltm_end < new.ltm_end
+    path = tmp_path / "ISRG_financials.xlsx"
+    build_workbook(old, 5)[0].save(path)
+
+    a, b = ch.Snapshot(ch.read_raw(path)), ch.Snapshot(new.sources)
+    assert (a.q_end, b.q_end) == (old.ltm_end, new.ltm_end) and a.ltm["Revenue"] == old.ltm["Revenue"]
+    sections = ch.compare(a, b)
+    title, header, rows = sections[0]
+    assert title.startswith("Quarter ended") and rows[0][0] == "Revenue"
+    quarter, year_ago = (float(x.replace(",", "")) for x in rows[0][1:3])     # $ millions
+    assert quarter == pytest.approx((new.ytd["Revenue"] - old.ytd["Revenue"]) / 1e6, abs=1)
+    assert quarter - year_ago == pytest.approx((new.ltm["Revenue"] - old.ltm["Revenue"]) / 1e6, abs=1)
+
+    assert ch.report(new, path, tmp_path, date(2026, 11, 16)) == "new"
+    text = (tmp_path / "changes" / "ISRG_2026-11-16.md").read_text(encoding="utf-8")
+    assert "New quarterly report" in text and "| Revenue |" in text and "Balance sheet" in text
+    assert "What changed since the last build" in capsys.readouterr().out
+
+    build_workbook(new, 5)[0].save(path)                                      # same data: nothing to report
+    assert ch.report(new, path, tmp_path) is None
+    assert "No change in the reported figures" in capsys.readouterr().out
+
+
+def test_change_report_lists_restated_years(fins):
+    from edgar import changes as ch
+    src = fins["ISRG"].sources
+    before = src.copy()
+    row = before[(before["Line Item"] == "Revenue") & (before["Form"] == "10-K")].index[0]
+    before.loc[row, "Value"] = before.loc[row, "Value"] * 0.9
+    sections = ch.compare(ch.Snapshot(before), ch.Snapshot(src))
+    assert [s[0] for s in sections] == ["Earlier years restated"]
+    assert sections[0][2][0][0].startswith("Revenue, FY to") and sections[0][2][0][3] == "+11.1%"
+
+
+def test_rollup_reports_values_that_moved():
+    from edgar import rollup as ru
+    history = [{"ticker": "ACME", "run": "2026-08-01 09:00", "midpoint": 90.0, "price": 95.0},
+               {"ticker": "ACME", "run": "2026-11-01 09:00", "midpoint": 100.0, "price": 100.0},
+               {"ticker": "SAME", "run": "2026-11-01 09:00", "midpoint": 50.0, "price": 40.0}]
+    rows = [{"ticker": "ACME", "midpoint": 120.0, "price": 110.0}, {"ticker": "SAME", "midpoint": 50.0, "price": 41.0},
+            {"ticker": "NEW", "midpoint": 10.0, "price": 9.0}]
+    lines = ru.value_changes(rows, history)
+    assert len(lines) == 1 and "ACME" in lines[0] and "was $100.00 on 2026-11-01 09:00 (+20.0%)" in lines[0]
+    assert rows[0]["prev_midpoint"] == 100.0 and rows[1]["midpoint_change"] == 0 and "prev_run" not in rows[2]

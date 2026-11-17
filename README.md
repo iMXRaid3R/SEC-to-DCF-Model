@@ -1,5 +1,7 @@
 # EDGAR financial models
 
+[![tests](https://github.com/iMXRaid3R/SEC-to-DCF-Model/actions/workflows/tests.yml/badge.svg)](https://github.com/iMXRaid3R/SEC-to-DCF-Model/actions/workflows/tests.yml)
+
 Builds an Excel valuation model for a public company from its SEC filings: three linked statements, a ten-year
 forecast, a DCF, comparable companies and a one-page summary. One command per company, and a roll-up across
 a portfolio.
@@ -39,6 +41,7 @@ Run these from the project folder. In Git Bash use `./run`; in cmd or PowerShell
 | `./run --rollup` | Read every built workbook through Excel and write `Portfolio.xlsx` and `valuation_log.csv` |
 | `./run --rollup --base-only` | Same, Base scenario only (about a third of the time) |
 | `./run --writeup ISRG` | One-page Markdown summary in `writeups/`: values, scenarios, assumptions, your notes |
+| `./run ISRG --since backups/ISRG_financials_<date>.xlsx` | Show what changed between an older workbook and today's SEC data; builds nothing |
 | `./run ISRG --find accrued` | List the company's XBRL tags matching a word, to fill an empty line |
 | `./run ISRG --reset Beta` | Put a typed input back to its default |
 | `./run --fetch all` | Download data only, build nothing |
@@ -48,6 +51,16 @@ Other options: `--peers T1 T2`, `--no-peers`, `--years N`, `--forecast-years N`,
 `--offline`, `--refresh`, `--fresh`. Run `./run --help` for the full list.
 
 Close a workbook in Excel before rebuilding it.
+
+## After earnings: what changed
+
+Every rebuild compares the previous workbook with the new SEC data and prints what moved: the newly reported
+quarter against the same quarter a year earlier, trailing-twelve-month figures and margins before and after,
+the balance sheet, and any earlier years that were restated. When a new period arrived the report is also
+saved in `changes/` (git-ignored). `./run --list holdings` ends with the list of companies that had a new
+filing, and `./run --rollup` then shows how each value per share moved since its previous roll-up.
+
+The SEC's data updates when the 10-Q or 10-K is filed, which can be days or weeks after the earnings release.
 
 ## What's in a workbook
 
@@ -102,7 +115,8 @@ Colours: blue is an input, black a formula, green a link to another tab.
 uv run --with pytest --with requests --with pandas --with openpyxl pytest tests/test_model.py
 ```
 
-These run offline on saved filings in `tests/fixtures`. `tests/test_excel.py` recalculates workbooks in real
+These run offline on saved filings in `tests/fixtures`, and GitHub runs them on every push
+(`.github/workflows/tests.yml`; the badge at the top shows the result). `tests/test_excel.py` recalculates workbooks in real
 Excel (Windows, add `--with pywin32`).
 
 ## Layout of the code
@@ -119,6 +133,7 @@ edgar/comps.py      comparables
 edgar/inputs.py     keeps typed inputs across rebuilds
 edgar/rollup.py     portfolio roll-up through Excel
 edgar/writeup.py    one-page Markdown write-up
+edgar/changes.py    what changed since the last build
 ```
 
 ## Licence

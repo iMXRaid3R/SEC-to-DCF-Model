@@ -38,6 +38,7 @@ from edgar.comps import build_comps, peer_rows
 from edgar.inputs import backup, carry_over
 from edgar.sec import DEFAULT_EMAIL, EdgarError, load_company, load_json
 from edgar.transform import find_tags, load_financials
+from edgar.changes import report as report_changes
 from edgar.xl_fin import coverage_report as fin_coverage
 from edgar.xl_model import build_workbook, coverage_report, gap_report
 
@@ -93,6 +94,11 @@ def build_one(a, ticker, peers, out=None, quiet=False):
         print(f"\nTo use one, add it to overrides/{ticker}.json, e.g. {{\"Interest Income\": [\"TagName\"]}}")
         return
     fin = load_financials(facts, ticker, name, a.years, load_overrides(ticker))
+    if a.since:
+        if not Path(a.since).exists():
+            raise EdgarError(f"--since: no file {a.since}")
+        print(f"Comparing {Path(a.since).name} with today's SEC data (nothing is built or saved):")
+        return report_changes(fin, a.since)
     fin.adr_ratio = a.adr.get(ticker, 1)
     erp = a.erp.get("by_ticker", {}).get(ticker, a.erp.get("default"))
     if erp:
@@ -126,6 +132,7 @@ def build_one(a, ticker, peers, out=None, quiet=False):
     saved = backup(out)
     wb.save(out)
     print(f"Saved {out}" + (f"   (previous version: backups/{saved.name})" if saved else ""))
+    changed = report_changes(fin, saved, out.resolve().parent) if saved else None
     if model.kind == "fin":
         if not quiet:
             fin_coverage(model)
@@ -133,6 +140,7 @@ def build_one(a, ticker, peers, out=None, quiet=False):
         if not quiet:
             coverage_report(model)
         gap_report(model, facts)
+    return changed
 
 
 def fetch(a, wl, peer_map):
@@ -220,6 +228,9 @@ def main():
     p.add_argument("--find", nargs="+", metavar="WORD",
                    help="List this company's XBRL tags whose name or label contains every word, to fill a "
                         "'not reported' line via overrides/<TICKER>.json. Builds nothing")
+    p.add_argument("--since", metavar="WORKBOOK",
+                   help="Only show what changed between an older workbook of this ticker (e.g. one in backups/) "
+                        "and today's SEC data. Builds nothing")
     p.add_argument("--fetch", nargs="+", metavar="TICKER_OR_GROUP",
                    help="Only download SEC data into ./cache for these tickers or watchlist.json groups "
                         "(holdings, watchlist, all) and their peers; builds nothing")
@@ -262,11 +273,12 @@ def main():
             tickers = [t for v in groups.values() for t in v] if a.list == "all" else groups.get(a.list)
             if not tickers:
                 p.error(f"no group '{a.list}' in {WATCHLIST.name} (have: {', '.join(groups) or 'none'})")
-            failed = []
+            failed, moved = [], []
             for t in dict.fromkeys(tickers):
                 print(f"\n=== {t} ===")
                 try:
-                    build_one(a, t, peers_for(t), quiet=True)
+                    if build_one(a, t, peers_for(t), quiet=True) == "new":
+                        moved.append(t)
                 except EdgarError as e:
                     failed.append((t, str(e)))
                     print(f"  skipped: {e}")
@@ -275,6 +287,8 @@ def main():
                     print(f"  skipped: close {e.filename} in Excel and run again")
             if failed:
                 print("\nNot built: " + ", ".join(t for t, _ in failed))
+            print("\nNew filings since the last build: " + (", ".join(moved) + "  (reports saved in changes/)"
+                                                            if moved else "none"))
         elif a.json or a.ticker:
             build_one(a, a.ticker, peers_for(a.ticker), a.out)
         else:

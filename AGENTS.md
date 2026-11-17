@@ -27,6 +27,11 @@ date, shares, currency). `layout.py` declares every row of every sheet as a `Row
 reference, so formulas refer to rows by label. The `xl_*` writers place those formulas. Settings live on the
 Inputs tab (`layout.INPUT_SPEC`); the DCF tab links to them.
 
+`changes.py` compares the previous workbook's Raw tab with the new `fin.sources` on every rebuild (the Raw tab
+is the record of what a build was fed, so keep its columns and the `[fiscal year to date]` / `[LTM: ...]` /
+`[10-Q]` tag suffixes stable). `rollup.value_changes` reports value-per-share moves from `valuation_log.csv`.
+`.github/workflows/tests.yml` runs `tests/test_model.py` on every push: keep those tests offline.
+
 ## Rules that will bite you
 
 - **Row and setting labels are identifiers.** Formulas, the input registry, the roll-up parser and the tests

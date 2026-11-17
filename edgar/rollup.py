@@ -262,7 +262,9 @@ COLUMNS = [  # (header, field, format, width)
     ("Upside to midpoint", "upside", "pct", 12), ("Bear", "bear", "usd_price", 11), ("Bull", "bull", "usd_price", 11),
     ("Probability-weighted value", "weighted", "usd_price", 13), ("Upside to weighted", "upside_weighted", "pct", 12),
     ("Revenue growth in model", "growth_model", "pct", 13), ("Growth the price needs (exit method)", "growth_needed_exit", "pct", 15),
-    ("WACC", "wacc", "pct", 8), ("Terminal growth", "terminal_growth", "pct", 9), ("Checks", "checks", None, 16),
+    ("WACC", "wacc", "pct", 8), ("Terminal growth", "terminal_growth", "pct", 9),
+    ("DCF midpoint at the previous run", "prev_midpoint", "usd_price", 13), ("Change in midpoint", "midpoint_change", "pct", 11),
+    ("Previous run", "prev_run", None, 16), ("Checks", "checks", None, 16),
     ("Notes", "note", None, 70)]
 
 
@@ -307,6 +309,29 @@ def write_book(folder, rows, history):
     return path
 
 
+def value_changes(rows, history):
+    """Set prev_midpoint / midpoint_change / prev_run on each row from the latest earlier log entry of the same
+    ticker, and return printable lines for the values that moved by more than half a percent."""
+    last = {}
+    for h in history:                                   # the log is in run order: the last one seen wins
+        if h.get("midpoint") is not None:
+            last[h["ticker"]] = h
+    lines = []
+    for r in rows:
+        h = last.get(r["ticker"])
+        if not h or r.get("midpoint") is None or not h["midpoint"]:
+            continue
+        r["prev_midpoint"], r["prev_run"] = h["midpoint"], h["run"]
+        r["midpoint_change"] = r["midpoint"] / h["midpoint"] - 1
+        if abs(r["midpoint_change"]) >= 0.005:
+            price = ""
+            if r.get("price") and h.get("price"):
+                price = f"; share price {r['price'] / h['price'] - 1:+.1%}"
+            lines.append(f"  {r['ticker']:<6} DCF midpoint ${r['midpoint']:,.2f}, was ${h['midpoint']:,.2f} on "
+                         f"{h['run']} ({r['midpoint_change']:+.1%}){price}")
+    return lines
+
+
 def rollup(folder, tickers=None, base_only=False):
     folder = Path(folder)
     paths = sorted(folder.glob("*_financials.xlsx"))
@@ -321,6 +346,10 @@ def rollup(folder, tickers=None, base_only=False):
     rows = collect(paths, ("Base",) if base_only else SCENARIOS)
     if not rows:
         raise RuntimeError("No workbook could be read.")
+    moved = value_changes(rows, read_log(folder))
     log = append_log(folder, rows)
     book = write_book(folder, rows, read_log(folder))
     print(f"Saved {book.name} ({len(rows)} companies) and added {len(rows)} rows to {log.name}")
+    if moved:
+        print("Values that moved since each company's previous roll-up:")
+        print("\n".join(moved))
