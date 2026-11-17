@@ -25,6 +25,9 @@ The screenshots show Apple built with default settings, not a view on the stock.
 3. Run `./run AAPL` and open `AAPL_financials.xlsx` in Excel.
 4. Edit `watchlist.json` to list your own tickers and peers.
 
+On a Mac or Linux, run `chmod +x run` once, then use `./run`. Building workbooks works there; `--rollup` and
+`--writeup` read values through Excel on Windows, so they are Windows-only.
+
 ## Everyday commands
 
 Run these from the project folder. In Git Bash use `./run`; in cmd or PowerShell use `run`.
