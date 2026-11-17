@@ -21,6 +21,7 @@ from .layout import INPUT_ROWS, SCENARIOS, SHEET_NAMES
 LOG = "valuation_log.csv"
 BOOK = "Portfolio.xlsx"
 METHODS = {"perp": "DCF: perpetuity growth", "exit": "DCF: exit multiple", "peers": "Peer multiples"}
+FIN_METHODS = {"perp": "Equity model: residual income", "exit": "Equity model: exit P/B"}   # same two slots
 FIELDS = ["run", "ticker", "company", "currency", "price", "perp", "exit", "peers", "midpoint", "upside",
           "weighted", "upside_weighted", "w_bear", "w_base", "w_bull", "bear", "bull", "bear_perp", "bull_perp", "bear_exit", "bull_exit", "growth_model", "growth_needed_perp",
           "growth_needed_exit", "wacc", "terminal_growth", "scenario", "checks", "note"]
@@ -38,16 +39,19 @@ def parse_summary(get):
     dollars per US-listed share, so foreign filers are comparable with the price."""
     rows = {get(r, 1): r for r in range(1, 70) if isinstance(get(r, 1), str)}
     side = {get(r, 4): r for r in range(4, 11) if isinstance(get(r, 4), str)}
+    rate = side.get("WACC", side.get("Cost of equity"))          # financials are valued at the cost of equity
     out = {"company": (get(1, 1) or "").rsplit(" - Summary", 1)[0],
            "price": _num(get(rows["Share price (US listing)"], 2)), "scenario": get(rows["Scenario"], 2),
-           "wacc": _num(get(side["WACC"], 5)), "terminal_growth": _num(get(side["Terminal growth"], 5)),
+           "wacc": _num(get(rate, 5)) if rate else None, "terminal_growth": _num(get(side["Terminal growth"], 5)),
            "checks": get(side["Model checks"], 5)}
     head = rows["Method"]
     usd_col = 6 if get(head, 6) == "$ per US-listed share" else 3
     out["currency"] = "USD" if usd_col == 3 else next(
         (k.split("(")[1].split(" ")[0] for k in rows if k.startswith("Share price (") and "per ordinary" in k), "?")
     for key, label in METHODS.items():
+        label = label if label in rows else FIN_METHODS.get(key)
         out[key] = _num(get(rows[label], usd_col)) if label in rows else None
+    out["financial"] = FIN_METHODS["perp"] in rows
     for key, label in (("growth_model", "Revenue growth per year in the model"),
                        ("growth_needed", "Revenue growth per year the price needs")):
         r = rows.get(label)
@@ -87,6 +91,8 @@ def to_row(ticker, by_scenario, selected, run, weights=None):
         notes.append("no share price (live price blank: check the ticker's exchange prefix or type an override)")
     if mid is None:
         notes.append("no value per share (check Shares outstanding and the gap messages from the build)")
+    if base.get("financial"):
+        notes.append("financials template: the two values are residual income and exit P/B, at the cost of equity")
     if row["currency"] != "USD":
         notes.append(f"reports in {row['currency']}; values converted to $ per US-listed share")
     if isinstance(row["checks"], str) and "OK" not in row["checks"]:
@@ -133,7 +139,15 @@ def _settle(xl, watch, timeout=40, need_number=None, patience=25):
     return False
 
 
-def read_workbook(xl, path, scenarios=SCENARIOS):
+def _block(wb, sheet, rng):
+    """A range's values as a list of rows (one COM call), with Excel error codes turned into None."""
+    v = _call(lambda: wb.Worksheets(sheet).Range(rng).Value)
+    rows = v if isinstance(v, tuple) and v and isinstance(v[0], tuple) else ((v,),)
+    return [[None if isinstance(x, int) and not isinstance(x, bool) and x < -2_000_000_000 else x for x in row]
+            for row in rows]
+
+
+def read_workbook(xl, path, scenarios=SCENARIOS, extra=None):
     """{scenario: parse_summary()} and the scenario the file was saved on. Opens read-only; saves nothing.
     Excel calculates the workbook as it opens and again each time the scenario cell changes, so no extra
     recalculation is asked for: the scenario the file was saved on is read first, then only the others."""
@@ -161,6 +175,11 @@ def read_workbook(xl, path, scenarios=SCENARIOS):
             _call(lambda n=name: setattr(cell, "Value", n))
             _settle(xl, watch)
             out[name] = parse_summary(get)
+        if extra is not None:                    # the write-up also wants whole blocks, read under Base
+            if _call(lambda: cell.Value) != "Base":
+                _call(lambda: setattr(cell, "Value", "Base"))
+                _settle(xl, watch)
+            out["_extra"] = extra(lambda sheet, rng: _block(wb, sheet, rng))
         return out, selected, weights
     finally:
         _call(lambda: wb.Close(SaveChanges=False))     # named argument: a bare Close(False) can misfire on the

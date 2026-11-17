@@ -29,6 +29,12 @@ class Financials:
     ytd_months: int = 0         # months covered by ytd
     dilution: dict = None       # {"options", "strike", "rsus"} from the latest annual report, where tagged
 
+    def looks_financial(self):
+        """Banks, insurers and asset managers: no classified balance sheet and no operating-income line.
+        The standard model (EBITDA, working capital, net debt) does not describe them."""
+        has = lambda label: any(c in self.values.get(label, {}) for c in self.cols)
+        return not has("Total Current Assets") and not has("Operating Income") and not has("Cost of Revenue")
+
 
 def facts_to_df(facts_json):
     """Flatten us-gaap / ifrs-full and dei facts from annual and quarterly filings into one DataFrame."""

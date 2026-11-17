@@ -38,6 +38,7 @@ from edgar.comps import build_comps, peer_rows
 from edgar.inputs import backup, carry_over
 from edgar.sec import DEFAULT_EMAIL, EdgarError, load_company, load_json
 from edgar.transform import find_tags, load_financials
+from edgar.xl_fin import coverage_report as fin_coverage
 from edgar.xl_model import build_workbook, coverage_report, gap_report
 
 WATCHLIST = Path(__file__).resolve().parent / "watchlist.json"
@@ -108,7 +109,11 @@ def build_one(a, ticker, peers, out=None, quiet=False):
         print(f"Reports in {fin.currency} ({fin.annual_form}): the workbook converts the dollar share price; "
               f"ordinary shares per US-listed share = {fin.adr_ratio:g} (watchlist.json \"adr_ratio\")")
     rows = peer_rows(peers, a.email, a.refresh, skip={ticker}, adr=a.adr) if peers else []
-    wb, model = build_workbook(fin, a.forecast_years, rows)
+    template = a.template or a.templates.get(ticker)
+    wb, model = build_workbook(fin, a.forecast_years, rows, template)
+    if model.kind == "fin":
+        print("Financial company: built with the financials template (valued on equity, not free cash flow). "
+              "Use --template standard to force the standard model.")
     out = Path(out or f"{ticker}_financials.xlsx")
     if out.exists() and not a.fresh:
         kept, dropped = carry_over(out, wb, model.reg, a.reset or ())
@@ -121,9 +126,13 @@ def build_one(a, ticker, peers, out=None, quiet=False):
     saved = backup(out)
     wb.save(out)
     print(f"Saved {out}" + (f"   (previous version: backups/{saved.name})" if saved else ""))
-    if not quiet:
-        coverage_report(model)
-    gap_report(model, facts)
+    if model.kind == "fin":
+        if not quiet:
+            fin_coverage(model)
+    else:
+        if not quiet:
+            coverage_report(model)
+        gap_report(model, facts)
 
 
 def fetch(a, wl, peer_map):
@@ -148,6 +157,32 @@ def fetch(a, wl, peer_map):
     print(f"10-year Treasury yield: {rf:.2%} as of {day}" if rf else "10-year Treasury yield: not available")
 
 
+def setup(a):
+    """First run: the SEC contact email and a personal watchlist, both kept out of git."""
+    root = Path(__file__).resolve().parent
+    email_file = root / ".edgar_email"
+    email = a.email if a.email and a.email != DEFAULT_EMAIL else ""
+    if email_file.exists() and not email:
+        print("Contact email: already saved in .edgar_email")
+    else:
+        if not email:
+            print("The SEC asks for a contact email with every data request. It is saved in .edgar_email on this\n"
+                  "computer, sent only to sec.gov, and never committed to git.")
+            email = input("Your email: ").strip()
+        if "@" not in email:
+            sys.exit("That doesn't look like an email address. Run --setup again.")
+        email_file.write_text(email + "\n", encoding="utf-8")
+        print("Saved .edgar_email")
+    example = WATCHLIST.with_name("watchlist.example.json")
+    if WATCHLIST.exists():
+        print("Watchlist: watchlist.json already exists")
+    elif example.exists():
+        WATCHLIST.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
+        print("Created watchlist.json from the example: edit it to list your own tickers and peers")
+    print("\nReady. Try:   ./run AAPL        (builds AAPL_financials.xlsx; open it in Excel)\n"
+          "Then:        ./run --list holdings   and   ./run --rollup")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("ticker", nargs="?", help="Ticker, e.g. AAPL")
@@ -162,6 +197,9 @@ def main():
     p.add_argument("--peers", nargs="+", metavar="TICKER",
                    help="Peers for the Comps tab (default: this ticker's list in watchlist.json)")
     p.add_argument("--no-peers", action="store_true", help="Skip the Comps tab")
+    p.add_argument("--template", choices=("standard", "financial"),
+                   help="Which model to build. Default: financial for banks and insurers (detected from the "
+                        "filings) or tickers listed under \"template\" in watchlist.json, otherwise standard")
     p.add_argument("--fresh", action="store_true", help="Don't carry inputs over from an existing workbook")
     p.add_argument("--reset", nargs="+", metavar="WORD",
                    help="Put typed inputs whose name contains one of these words back to their defaults, "
@@ -172,6 +210,11 @@ def main():
     p.add_argument("--rollup", nargs="*", metavar="TICKER_OR_GROUP",
                    help="Read every built workbook through Excel (Bear/Base/Bull) and write Portfolio.xlsx plus a "
                         "row per company in valuation_log.csv. Optionally limit to tickers or watchlist.json groups")
+    p.add_argument("--writeup", nargs="+", metavar="TICKER",
+                   help="Write a one-page Markdown summary of each built workbook into writeups/ (values, "
+                        "scenarios, assumptions and your Notes tab), read through Excel")
+    p.add_argument("--setup", action="store_true",
+                   help="First-time setup: save your SEC contact email, create watchlist.json from the example")
     p.add_argument("--base-only", action="store_true",
                    help="With --rollup: read only the Base scenario (about a third of the time; no Bear/Bull range)")
     p.add_argument("--find", nargs="+", metavar="WORD",
@@ -183,10 +226,13 @@ def main():
     a = p.parse_args()
     if a.forecast_years < 3:
         p.error("--forecast-years must be at least 3")
+    if a.setup:
+        return setup(a)
     sec.OFFLINE = a.offline
     wl = load_watchlist()
     peer_map = {k.upper(): v for k, v in wl.get("peers", {}).items()}
     a.adr = {k.upper(): v for k, v in wl.get("adr_ratio", {}).items()}
+    a.templates = {k.upper(): v for k, v in wl.get("template", {}).items()}
     a.erp = dict(wl.get("equity_risk_premium", {}))
     a.erp["by_ticker"] = {k.upper(): v for k, v in a.erp.get("by_ticker", {}).items()}
 
@@ -196,7 +242,10 @@ def main():
         return a.peers or peer_map.get((ticker or "").upper(), [])
 
     try:
-        if a.rollup is not None:
+        if a.writeup:
+            from edgar.writeup import writeups
+            writeups(Path(__file__).resolve().parent, a.writeup)
+        elif a.rollup is not None:
             from edgar.rollup import rollup
             groups = {k: v for k, v in wl.items() if isinstance(v, list)}
             names = [t for g in a.rollup for t in (groups.get(g, [g]) if g != "all" else sum(groups.values(), []))]

@@ -9,13 +9,21 @@ formulas (`STOCKHISTORY`), so the workbooks need Microsoft 365.
 
 This is a personal research tool. Its output is a starting point for your own assumptions, not investment advice.
 
+![Summary tab](docs/summary.jpg)
+
+![Value per share by method](docs/football-field.jpg)
+
+The screenshots show Apple built with default settings, not a view on the stock. More: [Inputs](docs/inputs.jpg),
+[Drivers](docs/drivers.jpg), [DCF](docs/dcf.jpg).
+
 ## Setup
 
 1. Install [uv](https://docs.astral.sh/uv/). It fetches Python and the packages the first time you run.
-2. The SEC asks for a contact email with every request. Put yours in a file named `.edgar_email` next to
-   `edgar_etl.py` (one line, git-ignored), or set the `EDGAR_EMAIL` environment variable.
-3. Copy `watchlist.example.json` to `watchlist.json` and list your own tickers and peers. Your copy is
-   git-ignored, so it stays private.
+2. Run `./run --setup` (Git Bash) or `run --setup` (cmd / PowerShell). It asks for the contact email the SEC
+   requires with every request and saves it in `.edgar_email`, and creates `watchlist.json` from the example.
+   Both files are git-ignored, so they stay on your computer.
+3. Run `./run AAPL` and open `AAPL_financials.xlsx` in Excel.
+4. Edit `watchlist.json` to list your own tickers and peers.
 
 ## Everyday commands
 
@@ -27,13 +35,14 @@ Run these from the project folder. In Git Bash use `./run`; in cmd or PowerShell
 | `./run --list holdings` | Build every ticker in a `watchlist.json` group (`holdings`, `watchlist`, `all`) |
 | `./run --rollup` | Read every built workbook through Excel and write `Portfolio.xlsx` and `valuation_log.csv` |
 | `./run --rollup --base-only` | Same, Base scenario only (about a third of the time) |
+| `./run --writeup ISRG` | One-page Markdown summary in `writeups/`: values, scenarios, assumptions, your notes |
 | `./run ISRG --find accrued` | List the company's XBRL tags matching a word, to fill an empty line |
 | `./run ISRG --reset Beta` | Put a typed input back to its default |
 | `./run --fetch all` | Download data only, build nothing |
 | `./run --comps ISRG SYK MDT` | Standalone comparables table |
 
-Other options: `--peers T1 T2`, `--no-peers`, `--years N`, `--forecast-years N`, `--offline`, `--refresh`,
-`--fresh`. Run `./run --help` for the full list.
+Other options: `--peers T1 T2`, `--no-peers`, `--years N`, `--forecast-years N`, `--template financial`,
+`--offline`, `--refresh`, `--fresh`. Run `./run --help` for the full list.
 
 Close a workbook in Excel before rebuilding it.
 
@@ -74,11 +83,15 @@ Colours: blue is an input, black a formula, green a link to another tab.
 - **Handles:** US companies filing 10-K and 10-Q; foreign filers on 20-F or 40-F under US GAAP or IFRS, in any
   reporting currency (annual data only), with the dollar share price converted through a live rate and an ADR
   ratio set in `watchlist.json`.
-- **Doesn't fit:** banks, insurers and asset managers. They build, but the layout (EBITDA, working capital, net
-  debt) is wrong for them.
+- **Banks and insurers** get a different workbook automatically (or with `--template financial`): free cash
+  flow and net debt don't describe them, so they are valued on equity. The forecast is a return on equity and a
+  payout; value is book equity plus the present value of returns above the cost of equity, with an exit
+  price-to-book cross-check. It has Summary, Inputs and Equity Model tabs and works with the roll-up and write-up.
+  Preferred stock is not separated from common equity, and a company that doesn't report shareholders' equity
+  on its own line (Brookfield, for example) can't be valued this way.
 - **Gaps in the SEC data:** some companies have no usable share count (multiple share classes; type it on
   Inputs), some don't tag a line such as depreciation, and a foreign filer's latest year can be missing.
-- **Roll-up:** Windows with Excel only, because it reads calculated values through Excel.
+- **Roll-up and write-up:** Windows with Excel only, because they read calculated values through Excel.
 
 ## Tests
 
@@ -98,9 +111,11 @@ edgar/mapping.py    line item -> XBRL tags (US GAAP and IFRS)
 edgar/transform.py  filings -> annual, LTM and year-to-date values
 edgar/layout.py     every row of every sheet and its formulas
 edgar/xl_*.py       sheet writers (model, inputs, DCF, summary, revenue build)
+edgar/xl_fin.py     the financials template (banks, insurers)
 edgar/comps.py      comparables
 edgar/inputs.py     keeps typed inputs across rebuilds
 edgar/rollup.py     portfolio roll-up through Excel
+edgar/writeup.py    one-page Markdown write-up
 ```
 
 ## Licence

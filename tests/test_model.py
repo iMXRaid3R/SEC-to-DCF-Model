@@ -322,3 +322,40 @@ def test_rollup_row_and_workbook(tmp_path):
     assert len(history) == 2 and history[0]["midpoint"] == 120.0
     ws = load_workbook(ru.write_book(tmp_path, [row], history))["Portfolio"]
     assert ws["A5"].value == "ACME" and ws["G5"].value == 120.0
+
+
+# ---- financials template, write-up ------------------------------------------
+def test_financial_template_builds_an_equity_model(fins):
+    from edgar import xl_fin
+    from edgar.layout import INPUT_ROWS as I
+    wb, m = build_workbook(fins["KO"], 10, template="financial")
+    assert m.kind == "fin" and wb.sheetnames == ["Summary", "Inputs", "Equity Model", "Notes", "Mapping", "Raw", "_inputs"]
+    ws, g = wb["Equity Model"], m.grid
+    assert g.ytd is None and len(g.fcst) == 10
+    assert ws.cell(row=xl_fin.ROW["Net income"], column=g.last_fy.j).value == fy_value(fins["KO"], "Net Income", fins["KO"].cols[-1])
+    ni = ws.cell(row=xl_fin.ROW["Net income"], column=g.fcst[0].j).value            # ROE x opening equity
+    assert str(xl_fin.ROW["Return on equity"]) in ni and g.last_fy.L in ni
+    assert wb["Summary"]["A13"].value == "Equity model: residual income"
+    assert wb["Inputs"][f"A{I['multiple']}"].value == "Exit price-to-book multiple"
+    assert wb["Inputs"][f"B{I['tv_mode']}"].value is None                           # no DCF-only settings
+    # a normal company is not mistaken for a financial one
+    assert not fins["KO"].looks_financial() and build_workbook(fins["KO"], 5)[1].kind == "standard"
+
+
+def test_writeup_renders_the_page():
+    from datetime import date
+    from edgar import writeup as wu
+    s = {"company": "ACME CORP (ACME)", "currency": "USD", "price": 100.0, "perp": 110.0, "exit": 130.0, "peers": 95.0,
+         "wacc": 0.09, "terminal_growth": 0.025, "checks": "ALL CHECKS OK", "scenario": "Base",
+         "growth_model": (0.08, 0.08), "growth_needed": (0.12, 0.10)}
+    by = {"Bear": dict(s, perp=80.0, exit=100.0), "Base": s, "Bull": dict(s, perp=150.0, exit=170.0)}
+    summary = [[None] * 7 for _ in range(40)]
+    summary[4][3:5], summary[5][1], summary[5][3:5] = ["Valuation date", date(2026, 11, 16)], date(2026, 11, 13), ["WACC", 0.09]
+    summary[20][0], summary[21][1:3] = "Key figures", ["FY2025A", "FY2026E"]
+    summary[22][:3], summary[23][:3] = ["Revenue", 5e9, 6e9], ["Revenue growth", 0.1, 0.2]
+    notes = [[None]] * 3 + [["Thesis"], ["It compounds."], [None], ["Risks and what would change my mind"], ["Competition."]]
+    md = wu.render("ACME", by, "Base", (0.25, 0.5, 0.25), {"summary": summary, "inputs": [[None, None]] * 70,
+                                                           "drivers": [], "notes": notes}, date(2026, 11, 16))
+    assert "| **Midpoint of the two** | **$90.00** | **$120.00** | **$160.00** |" in md
+    assert "Probability-weighted value: $122.50" in md and "| Revenue | 5,000 | 6,000 |" in md
+    assert "## Thesis" in md and "- It compounds." in md and "## Risks and what would change my mind" in md

@@ -18,3 +18,5 @@ __pycache__/
 
 # Excel lock files
 ~$*
+writeups/
+docs/*.xlsx

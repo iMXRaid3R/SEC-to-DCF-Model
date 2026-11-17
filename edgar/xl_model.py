@@ -26,9 +26,11 @@ STATEMENTS = (("IS", IS_ROWS), ("BS", BS_ROWS), ("CF", CF_ROWS))
 class Model:
     """Grid + SEC values per column, and the rule for when a fallback formula can be used."""
 
-    def __init__(self, fin, n_fcst):
+    kind = "standard"       # "fin" for the financials template (xl_fin.py)
+
+    def __init__(self, fin, n_fcst, ytd=True):
         self.fin = fin
-        self.grid = Grid(fin.cols, fin.ltm_end, n_fcst, fin.ytd_months if fin.ytd else 0)
+        self.grid = Grid(fin.cols, fin.ltm_end, n_fcst, fin.ytd_months if fin.ytd and ytd else 0)
         self.settings = {}      # DCF settings (label, default, note, options) shown on the Inputs tab
         self.data = {}      # label -> {column index: value}
         self.reg = Registry()   # every input cell, so a rebuild can keep what the user typed
@@ -338,11 +340,15 @@ TAB_ORDER = ["Summary", "Inputs", "Drivers", RB_SHEET, "Income Statement", "Bala
              "Comps", "Checks & Metrics", "Notes", "Mapping", "Raw", xl_dcf.CALC_SHEET]
 
 
-def build_workbook(fin, n_fcst=10, peers=()):
-    """peers: _metrics() rows for comparable companies; adds a Comps tab and links the DCF exit multiple to it.
+def build_workbook(fin, n_fcst=10, peers=(), template=None):
+    """template: "standard", "financial", or None to pick the financials template for banks and insurers.
+    peers: _metrics() rows for comparable companies; adds a Comps tab and links the DCF exit multiple to it.
     Tabs: Summary | Inputs, Drivers, Revenue Build (yours to change) | the three statements | DCF, Comps, Checks
     | Notes, Mapping, Raw (reference). Working cells and the input registry sit on hidden sheets."""
     st.set_currency(fin.currency)
+    if template == "financial" or (template is None and fin.looks_financial()):
+        from .xl_fin import build_financial
+        return build_financial(fin, n_fcst)
     m = Model(fin, n_fcst)
     wb = Workbook()
     wb.active.title = SHEET_NAMES["A"]

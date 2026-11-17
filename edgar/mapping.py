@@ -124,7 +124,17 @@ CF_MAP = [
     ("Cash from Financing", "flow", "USD", ["NetCashProvidedByUsedInFinancingActivities",
                                             "CashFlowsFromUsedInFinancingActivities"]),
 ]
-ALL_MAPS = IS_MAP + BS_MAP + CF_MAP
+# Extra lines used only by the financials template (banks, insurers, asset managers): see xl_fin.py.
+FIN_MAP = [
+    ("Net Interest Income", "flow", "USD", ["InterestIncomeExpenseNet", "NetInterestIncome"]),
+    ("Provision for Credit Losses", "flow", "USD", ["ProvisionForLoanLeaseAndOtherLosses", "ProvisionForCreditLosses",
+                                                    "ProvisionForLoanAndLeaseLosses", "CreditLossExpenseReversal"]),
+    ("Deposits", "instant", "USD", ["Deposits", "DepositsFromCustomers"]),
+    ("Loans, Net", "instant", "USD", ["LoansAndLeasesReceivableNetReportedAmount", "NotesReceivableNet",
+                                      "FinancingReceivableExcludingAccruedInterestAfterAllowanceForCreditLoss",
+                                      "LoansAndAdvancesToCustomers"]),
+]
+ALL_MAPS = IS_MAP + BS_MAP + CF_MAP + FIN_MAP
 MAP_BY_LABEL = {m[0]: m for m in ALL_MAPS}
 
 ANNUAL_FORMS = {"10-K", "10-K/A", "10-KT", "20-F", "20-F/A", "40-F", "40-F/A"}   # 20-F / 40-F: foreign filers
@@ -137,7 +147,7 @@ def fmt_tag(entry):
 
 
 def company_maps(overrides=None):
-    """(IS, BS, CF) maps for one company. `overrides` is the content of overrides/<TICKER>.json:
+    """(IS, BS, CF, financials-only) maps for one company. `overrides` is the content of overrides/<TICKER>.json:
     {"Interest Income": ["SomeTag", ["TagA", "TagB"]]} - tags tried before the standard ones for that line;
     an inner list means "sum these". Unknown line names are reported by load_overrides, not here."""
     overrides = overrides or {}
@@ -148,4 +158,4 @@ def company_maps(overrides=None):
             extra = [tuple(t) if isinstance(t, list) else t for t in overrides.get(label, [])]
             out.append((label, kind, unit, extra + [t for t in tags if t not in extra]))
         return out
-    return merged(IS_MAP), merged(BS_MAP), merged(CF_MAP)
+    return merged(IS_MAP), merged(BS_MAP), merged(CF_MAP), merged(FIN_MAP)

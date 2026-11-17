@@ -91,8 +91,8 @@ def write_dcf(ws, m, calc):
     put("erp", "Equity risk premium", erp if erp else DEFAULTS["erp"], "pct", "input",
         note=erp_source if erp else "Default: set \"equity_risk_premium\" in watchlist.json to change it for every model")
     put("beta", "Beta", f"=IFERROR(ROUND({last.market('Adjusted beta')},2),{DEFAULTS['beta']:g})", "num", "input",
-        note="Defaults to the adjusted beta on the Assumptions tab (5-year monthly unless you change the window; "
-             "1.0 without live prices). Type a number to override")
+        note="Defaults to the adjusted beta above (5-year monthly unless you change the window; 1.0 without "
+             "live prices). Type a number to override")
     put("ke", "Cost of equity", f"={B('rf')}+{B('beta')}*{B('erp')}", "pct")
     put("kd", "Pre-tax cost of debt", DEFAULTS["kd"], "pct", "input")
     put("tax", "Tax rate (forecast year 1)", f"={yr1.v('Tax rate')}", "pct")
@@ -278,7 +278,7 @@ def write_dcf(ws, m, calc):
 
     ws.column_dimensions["A"].width = 40
     for j in range(2, max(8, 3 + n)):
-        ws.column_dimensions[get_column_letter(j)].width = 15
+        ws.column_dimensions[get_column_letter(j)].width = 18 if j == 2 else 15
     ws.freeze_panes = "B4"
 
 

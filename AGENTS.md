@@ -61,9 +61,18 @@ Inputs tab (`layout.INPUT_SPEC`); the DCF tab links to them.
   line and are deducted in the DCF.
 - Multiples on negative earnings or EBITDA are left blank so they do not distort peer medians.
 
+## Two templates
+
+`build_workbook` builds the standard model, or `xl_fin.build_financial` when the company looks like a bank or
+insurer (`Financials.looks_financial`) or `--template financial` is given. The financials workbook is valued on
+equity (residual income, exit price-to-book) and has its own row map in `xl_fin.py`, but it shares the Inputs
+tab, the registry and the Summary labels, so the roll-up and write-up read both. Keep those Summary labels and
+the Inputs row map (`layout.INPUT_SPEC`) in step across the two.
+
 ## Known gaps
 
-- Banks, insurers and asset managers need a different template.
+- The financials template treats all shareholders' equity as common (preferred stock is not separated) and
+  needs a parent-equity line in the SEC data.
 - Quarterly columns do not exist; year one uses year-to-date totals only.
 - The DCF sensitivity grids are stacked, and the statements have no growth or margin rows.
-- `tests/test_excel.py` and the roll-up's Excel automation have no coverage outside Windows.
+- `tests/test_excel.py`, the roll-up's and the write-up's Excel automation have no coverage outside Windows.

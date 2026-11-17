@@ -131,19 +131,24 @@ def write_inputs(ws, m):
         f'MAX(0,N({B("Options")})*(1-N({B("Option strike")})/{B("Share price")})),0))', st.FMT["shares"], bold=True,
         note="Shares outstanding + stock units + options x (1 - exercise price / share price)")
 
-    # ---- settings collected while the DCF tab was written (defaults, notes and dropdown options)
+    # ---- settings collected while the valuation tab was written (defaults, notes and dropdown options)
+    rate = xl_dcf.ref("wacc") if m.kind != "fin" else f"({B('rf')}+{B('beta')}*{B('erp')})"     # WACC / cost of equity
+    rate_name = "WACC" if m.kind != "fin" else "the cost of equity"
     checks = {
         "rf": f'=IF(OR({B("rf")}<0.01,{B("rf")}>0.08),"Outside 1%-8%","")',
         "erp": f'=IF(OR({B("erp")}<0.03,{B("erp")}>0.07),"Outside the usual 3%-7%","")',
         "beta": f'=IF(OR({B("beta")}<0.5,{B("beta")}>2),"Unusual: outside 0.5-2.0","")',
-        "g": (f'=IF({B("g")}>={xl_dcf.ref("wacc")},"At or above WACC: the perpetuity value breaks",'
+        "g": (f'=IF({B("g")}>={rate},"At or above {rate_name}: the perpetuity value breaks",'
               f'IF({B("g")}>{B("rf")},"Above the risk-free rate: hard to sustain forever",""))'),
-        "multiple": f'=IF(N({B("multiple")})>30,"High: compare with the Comps tab","")',
-        "roic_t": f'=IF({B("roic_t")}<{xl_dcf.ref("wacc")},"Below WACC: growth destroys value","")',
+        "multiple": (f'=IF(N({B("multiple")})>30,"High: compare with the Comps tab","")' if m.kind != "fin" else
+                     f'=IF(N({B("multiple")})>4,"High for a price-to-book multiple","")'),
+        "roic_t": f'=IF({B("roic_t")}<{rate},"Below WACC: growth destroys value","")',
     }
     placed = ("rf", "erp", "beta", "kd", "g", "multiple", "tv_mode", "roic_t", "mid", "sbc_mode", "capex_mode",
               "lease_mode", "val_override", "other_assets", "other_claims")
     for key in placed:
+        if key not in m.settings:               # the financials template has fewer settings
+            continue
         s = m.settings[key]
         optional = s["value"] is None
         c = put(key, s["label"], s["value"], None if s.get("options") else st.FMT[s["fmt"]],
@@ -179,7 +184,7 @@ def write_inputs(ws, m):
         note="2/3 x raw + 1/3 x 1.0: measured betas drift toward the market's 1.0 over time")
 
     ws.conditional_formatting.add(f"C5:C{max(R.values())}", FormulaRule(formula=['LEN(C5)>0'], fill=st.INPUT_FILL))
-    for L, w in zip("ABCD", (44, 22, 46, 110)):
+    for L, w in zip("ABCD", (44, 26, 46, 110)):
         ws.column_dimensions[L].width = w
     ws.freeze_panes = "B4"
 
