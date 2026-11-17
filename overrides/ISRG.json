@@ -1,0 +1,4 @@
+{
+  "_note": "Extra tags for ISRG, tried before the standard ones. An inner list means: add these together. Find tag names with: python edgar_etl.py ISRG --find accrued",
+  "Accrued Liabilities": [["EmployeeRelatedLiabilitiesCurrent", "OtherAccruedLiabilitiesCurrent"]]
+}

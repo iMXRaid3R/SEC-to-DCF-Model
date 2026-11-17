@@ -1,0 +1,20 @@
+# Personal: the contact email sent to sec.gov, and your own tickers
+.edgar_email
+watchlist.json
+
+# Generated: rebuild with ./run
+*_financials.xlsx
+Portfolio.xlsx
+valuation_log.csv
+comps.xlsx
+backups/
+cache/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# Excel lock files
+~$*

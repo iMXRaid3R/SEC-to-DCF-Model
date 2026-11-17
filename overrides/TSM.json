@@ -1,0 +1,4 @@
+{
+  "_note": "TSM reports its marketable securities in several IFRS categories. These are added together so they count as cash in net debt. Check against the balance sheet when a new 20-F arrives.",
+  "Short-Term Investments": [["CurrentFinancialAssetsAtFairValueThroughOtherComprehensiveIncome", "CurrentFinancialAssetsAtAmortisedCost"]]
+}

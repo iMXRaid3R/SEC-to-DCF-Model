@@ -1,0 +1,72 @@
+{
+  "_note": "Copy this file to watchlist.json and edit it. Groups are used by `--list` and `--fetch` (holdings, watchlist, all); peers set each ticker's Comps tab; adr_ratio is ordinary shares per US-listed share where it isn't 1; equity_risk_premium applies to every model, with optional per-ticker rates.",
+  "holdings": [
+    "AAPL",
+    "MSFT",
+    "COST",
+    "KO"
+  ],
+  "watchlist": [
+    "NVDA",
+    "JNJ",
+    "ASML",
+    "TSM"
+  ],
+  "peers": {
+    "AAPL": [
+      "MSFT",
+      "GOOGL",
+      "DELL"
+    ],
+    "MSFT": [
+      "GOOGL",
+      "AMZN",
+      "ORCL"
+    ],
+    "COST": [
+      "WMT",
+      "TGT",
+      "BJ"
+    ],
+    "KO": [
+      "PEP",
+      "KDP",
+      "MNST"
+    ],
+    "NVDA": [
+      "AVGO",
+      "AMD",
+      "MU"
+    ],
+    "JNJ": [
+      "ABBV",
+      "MRK",
+      "PFE",
+      "ABT"
+    ],
+    "ASML": [
+      "AMAT",
+      "LRCX",
+      "KLAC"
+    ],
+    "TSM": [
+      "INTC",
+      "GFS",
+      "UMC"
+    ]
+  },
+  "adr_ratio": {
+    "TSM": 5
+  },
+  "equity_risk_premium": {
+    "default": 0.0446,
+    "source": "Damodaran country risk premium table, January 2026: US total equity risk premium 4.46% (mature market 4.23%)",
+    "by_ticker": {
+      "TSM": 0.0501,
+      "ASML": 0.0423,
+      "SPOT": 0.0423,
+      "BN": 0.0423
+    },
+    "_note": "default applies to every model; by_ticker overrides it (Taiwan 5.01%; Netherlands, Luxembourg/Sweden and Canada 4.23%). Update when a new table is published: https://pages.stern.nyu.edu/~adamodar/New_Home_Page/datafile/ctryprem.html"
+  }
+}

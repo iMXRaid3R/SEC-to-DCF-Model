@@ -1,0 +1,209 @@
+"""Inputs tab: every setting in one place - scenario, price and currency, dilution, discount rate, terminal
+value, method choices and equity-bridge adjustments. Yellow / blue cells are yours to change; the Check column
+flags values that are out of the usual range. The other tabs read from here."""
+from openpyxl.formatting.rule import FormulaRule
+from openpyxl.styles import Alignment, Font
+from openpyxl.worksheet.datavalidation import DataValidation
+
+from . import xl_dcf
+from . import xl_style as st
+from .layout import BASIS_OPTIONS, INPUT_HEADERS, INPUT_ROWS, SCENARIOS, SHEET_NAMES
+
+R = INPUT_ROWS
+WARN = Font(color="C00000", bold=True)
+
+
+def write_inputs(ws, m):
+    g, fin = m.grid, m.fin
+    cur, foreign = fin.currency, fin.currency != "USD"
+    ws["A1"], ws["A1"].font = f"{fin.name} ({fin.ticker}) - Inputs", st.TITLE_FONT
+    ws["A2"] = ("Every setting in one place. Blue = yours to change (yellow = usually left blank). Typed values "
+                "are kept when the workbook is rebuilt; clear a cell and rebuild to get its default back. The "
+                "yearly growth and margin paths are on the Drivers tab.")
+    ws["A2"].font = st.NOTE_FONT
+    for j, h in enumerate(("Setting", "Value", "Check", "What it is"), start=1):
+        st.header_cell(ws.cell(row=3, column=j), h)
+    for title, r in INPUT_HEADERS.items():
+        c = ws.cell(row=r, column=1, value=title)
+        c.font, c.fill = st.HDR_FONT, st.FILL["fcst"]
+        for j in (2, 3, 4):
+            ws.cell(row=r, column=j).fill = st.FILL["fcst"]
+    B = lambda key: f"B{R[key]}"
+
+    def put(key, label, value, fmt=None, kind="formula", note="", reg=None, options=None, check=None, bold=False):
+        """kind: "input" (blue), "optional" (blue on yellow, normally blank), "formula" (black)."""
+        r = R[key]
+        ws.cell(row=r, column=1, value=label).font = st.font(bold=bold)
+        c = ws.cell(row=r, column=2, value=value)
+        c.alignment = Alignment(horizontal="right")
+        if fmt:
+            c.number_format = fmt
+        if kind == "formula":
+            c.font = st.formula_font(value, bold) if isinstance(value, str) else st.font(bold=bold)
+        else:
+            c.font = st.font(st.BLUE, bold)
+            if kind == "optional":
+                c.fill = st.INPUT_FILL
+            m.reg.add(ws, c, *(reg or ("Inputs", label)))
+        if options:
+            dv = DataValidation(type="list", formula1='"' + ",".join(str(o) for o in options) + '"', allow_blank=False)
+            ws.add_data_validation(dv)
+            dv.add(c)
+            c.fill = st.INPUT_FILL
+        if check:
+            ws.cell(row=r, column=3, value=check).font = WARN
+        if note:
+            ws.cell(row=r, column=4, value=note).font = st.NOTE_FONT
+        return c
+
+    # ---- Scenario
+    put("Scenario", "Scenario", "Base", kind="input", options=SCENARIOS, reg=("Control", "Scenario"), bold=True,
+        note="Which case drives the whole model. Bear / Base / Bull inputs are in the table on the Drivers tab")
+    put("Basis", "Base case starts from", BASIS_OPTIONS[0], kind="input", options=BASIS_OPTIONS,
+        reg=("Control", "Basis"), note="History the Base year-1 drivers are taken from: 3-year average, last "
+                                       "fiscal year, or last twelve months")
+    put("Use YTD", "Year 1 uses reported year-to-date", "On" if g.ytd is not None else "Off", kind="input",
+        options=("On", "Off"),
+        note=(f"On: {g.fcst[0].header} = the {fin.ytd_months} months already reported + a forecast for the rest of "
+              "the year. Off: the whole year is forecast from last year") if g.ytd is not None else
+        "No quarterly report newer than the last annual report, so the whole of year 1 is forecast")
+    for key, name, w in (("w_bear", "Bear", 0.25), ("w_base", "Base", 0.5), ("w_bull", "Bull", 0.25)):
+        put(key, f"Probability: {name}", w, st.FMT["pct"], "input",
+            note="Used by the portfolio roll-up for a probability-weighted value (the workbook itself shows one "
+                 "scenario at a time)" if key == "w_bear" else "")
+    put("w_total", "Probabilities add up to", f"=SUM({B('w_bear')}:{B('w_bull')})", st.FMT["pct"],
+        check=f'=IF(ABS({B("w_total")}-1)>0.0001,"Should be 100%","")')
+
+    # ---- Share price and currency
+    put("Ticker", "Ticker", fin.symbol or fin.ticker, kind="input", reg=("Market", "Ticker"),
+        note="Used for the live price. Without the exchange prefix Excel can pick a foreign listing: use e.g. "
+             f"XNAS:{fin.ticker} (Nasdaq) or XNYS:{fin.ticker} (NYSE)")
+    put("Live close", "Live close (STOCKHISTORY)", st.stockhistory(B("Ticker"), 2), st.FMT["usd_price"],
+        note="Latest close of the US listing from Excel (Microsoft 365, internet)")
+    put("Price date", "Price date", st.stockhistory(B("Ticker"), 1), "yyyy-mm-dd")
+    put("Price override", "Price override ($)", None, st.FMT["usd_price"], "optional", reg=("Market", "Price override"),
+        note="Optional: type a price here to use instead of the live close")
+    if foreign:
+        put("FX rate", f"{cur} per US dollar (live)", st.stockhistory(f'"USD:{cur}"', 2), st.FMT["fx"],
+            note=f"The filings are in {cur}; the US listing trades in dollars")
+        put("FX override", f"{cur} per US dollar override", None, st.FMT["fx"], "optional",
+            reg=("Market", "FX override"), note="Optional: type a rate to use instead of the live one")
+        put("Shares per listing", "Ordinary shares per US-listed share", fin.adr_ratio, "General", "input",
+            reg=("Market", "Shares per listing"),
+            note="ADR ratio: 1 unless one US-listed share represents several ordinary shares (e.g. 5 for TSM)")
+    else:
+        put("FX rate", "Currency conversion", 1, st.FMT["fx"], note="1: filings and share price are both in US dollars")
+        put("FX override", "Currency conversion override", None, st.FMT["fx"], "optional", reg=("Market", "FX override"))
+        put("Shares per listing", "Ordinary shares per listed share", 1, "General", "input",
+            reg=("Market", "Shares per listing"))
+    fx = f'IF({B("FX override")}<>"",{B("FX override")},{B("FX rate")})'
+    put("Share price", "Share price ($)" if not foreign else f"Share price ({cur} per ordinary share)",
+        f'=IFERROR(IF({B("Price override")}<>"",{B("Price override")},{B("Live close")})*{fx}/{B("Shares per listing")},"")',
+        st.FMT["price"], bold=True,
+        check=f'=IF(N({B("Share price")})=0,"No price: check the ticker prefix or type an override","")',
+        note="Used by the DCF and market cap" + (
+            f": dollar price x {cur} per dollar / ordinary shares per listed share" if foreign else ""))
+    shares, as_of, how = fin.shares_out
+    put("Shares outstanding", "Shares outstanding", shares, st.FMT["shares"], "input" if shares else "optional",
+        reg=("Market", "Shares outstanding"),
+        check=f'=IF(N({B("Shares outstanding")})=0,"Needed for a value per share","")',
+        note=(f"Source: {how}" + (f", as of {as_of}" if as_of else "")) if shares else
+        "NOT FOUND in the SEC data (common with several share classes): type the total share count in full, "
+        "e.g. 1900000000")
+    put("Market cap", "Market cap",
+        f'=IF(N({B("Share price")})=0,"",{B("Share price")}*{B("Shares outstanding")})', st.FMT["usd"])
+    put("52w low", "52-week low ($)", st.stock_range(B("Ticker"), "MIN"), st.FMT["usd_price"])
+    put("52w high", "52-week high ($)", st.stock_range(B("Ticker"), "MAX"), st.FMT["usd_price"])
+
+    # ---- Dilution (treasury stock method for options; stock units count in full)
+    d = fin.dilution or {}
+    found = "From the latest annual report; check it against the equity-compensation note" \
+        if any(d.values()) else ""
+    put("Options", "Stock options outstanding", d.get("options"), "#,##0", "optional", note=found or
+        "Optional, in full. Left blank = no dilution from options")
+    put("Option strike", f"Average exercise price ({'$' if not foreign else cur})", d.get("strike"), st.FMT["price"],
+        "optional", note="Options only dilute to the extent the share price is above this")
+    put("RSUs", "Unvested stock units (RSUs / PSUs)", d.get("rsus"), "#,##0", "optional",
+        note="Optional, in full: counted one for one. Usually the larger item for tech companies")
+    put("Diluted shares", "Diluted shares used in the valuation",
+        f'=IF(N({B("Shares outstanding")})=0,"",{B("Shares outstanding")}+N({B("RSUs")})'
+        f'+IF(AND(N({B("Options")})>0,N({B("Share price")})>0),'
+        f'MAX(0,N({B("Options")})*(1-N({B("Option strike")})/{B("Share price")})),0))', st.FMT["shares"], bold=True,
+        note="Shares outstanding + stock units + options x (1 - exercise price / share price)")
+
+    # ---- settings collected while the DCF tab was written (defaults, notes and dropdown options)
+    checks = {
+        "rf": f'=IF(OR({B("rf")}<0.01,{B("rf")}>0.08),"Outside 1%-8%","")',
+        "erp": f'=IF(OR({B("erp")}<0.03,{B("erp")}>0.07),"Outside the usual 3%-7%","")',
+        "beta": f'=IF(OR({B("beta")}<0.5,{B("beta")}>2),"Unusual: outside 0.5-2.0","")',
+        "g": (f'=IF({B("g")}>={xl_dcf.ref("wacc")},"At or above WACC: the perpetuity value breaks",'
+              f'IF({B("g")}>{B("rf")},"Above the risk-free rate: hard to sustain forever",""))'),
+        "multiple": f'=IF(N({B("multiple")})>30,"High: compare with the Comps tab","")',
+        "roic_t": f'=IF({B("roic_t")}<{xl_dcf.ref("wacc")},"Below WACC: growth destroys value","")',
+    }
+    placed = ("rf", "erp", "beta", "kd", "g", "multiple", "tv_mode", "roic_t", "mid", "sbc_mode", "capex_mode",
+              "lease_mode", "val_override", "other_assets", "other_claims")
+    for key in placed:
+        s = m.settings[key]
+        optional = s["value"] is None
+        c = put(key, s["label"], s["value"], None if s.get("options") else st.FMT[s["fmt"]],
+                "optional" if optional else "input", note=s["note"], reg=("DCF", s["label"]),
+                options=s.get("options"), check=checks.get(key))
+        if key == "mid":
+            c.number_format = "0"
+    ws.cell(row=R["beta"], column=1).font = st.font(bold=True)
+
+    # ---- beta: measured from prices, then adjusted
+    def pick(key, text, value, options, note):
+        put(key, text, value, kind="input", options=options, reg=("Market", text), note=note)
+
+    put("Beta benchmark", "Beta benchmark", "SPY", kind="input", reg=("Market", "Beta benchmark"),
+        note="Index ETF the beta is measured against")
+    pick("Beta years", "Beta window (years)", 5, (2, 5), "2 or 5 years of history")
+    pick("Beta frequency", "Beta return frequency", "Monthly", ("Weekly", "Monthly"),
+         "5 years of monthly returns is the usual convention; 2 years of weekly reacts faster to recent trading")
+    # TAKE / DROP keep this a plain formula: Excel adds an implicit-intersection "@" to INDEX(SEQUENCE()) in
+    # formulas loaded from a file, which breaks it.
+    px = lambda ref: (f"_xlfn.STOCKHISTORY({ref},TODAY()-ROUND(365.25*{B('Beta years')},0),TODAY(),"
+                      f'IF({B("Beta frequency")}="Weekly",1,2),0,1)')
+    ret = lambda v: f"_xlfn.DROP(_xlpm.{v},1)/_xlfn.DROP(_xlpm.{v},-1)-1"
+    beta = ("=IFERROR(_xlfn.LET("
+            f"_xlpm.a,{px(B('Ticker'))},_xlpm.b,{px(B('Beta benchmark'))},"
+            "_xlpm.n,MIN(ROWS(_xlpm.a),ROWS(_xlpm.b)),"
+            "_xlpm.x,_xlfn.TAKE(_xlpm.a,-_xlpm.n),_xlpm.y,_xlfn.TAKE(_xlpm.b,-_xlpm.n),"
+            f'SLOPE({ret("x")},{ret("y")})),"")')
+    put("Computed beta", "Raw beta (regression)", beta, st.FMT["num"],
+        note="Slope of the stock's returns on the benchmark's over the window above")
+    put("Adjusted beta", "Adjusted beta (Blume)",
+        f'=IF(ISNUMBER({B("Computed beta")}),2/3*{B("Computed beta")}+1/3,"")', st.FMT["num"],
+        note="2/3 x raw + 1/3 x 1.0: measured betas drift toward the market's 1.0 over time")
+
+    ws.conditional_formatting.add(f"C5:C{max(R.values())}", FormulaRule(formula=['LEN(C5)>0'], fill=st.INPUT_FILL))
+    for L, w in zip("ABCD", (44, 22, 46, 110)):
+        ws.column_dimensions[L].width = w
+    ws.freeze_panes = "B4"
+
+
+def warnings_count(sheet=None):
+    """Formula text counting the non-blank cells in the Inputs tab's Check column."""
+    name = SHEET_NAMES["INP"]
+    return f'COUNTIF({name}!$C$5:$C${max(R.values())},"?*")'
+
+
+def write_notes(ws, m):
+    """A place for the thesis and sources that survives rebuilds (column A only)."""
+    ws["A1"], ws["A1"].font = f"{m.fin.name} ({m.fin.ticker}) - Notes", st.TITLE_FONT
+    ws["A2"] = ("Your own notes. Type in column A under each heading: these lines are carried over when the "
+                "workbook is rebuilt. Anything typed elsewhere on this tab, and any tab you add yourself, is not.")
+    ws["A2"].font = st.NOTE_FONT
+    r = 4
+    for title, lines in (("Thesis", 8), ("Key assumptions and why", 10), ("Risks and what would change my mind", 8),
+                         ("Sources and to-do", 10)):
+        st.header_cell(ws.cell(row=r, column=1), title)
+        ws.cell(row=r, column=1).alignment = Alignment(horizontal="left")
+        for k in range(1, lines + 1):
+            c = ws.cell(row=r + k, column=1)
+            c.alignment = Alignment(wrap_text=True, vertical="top")
+            m.reg.add(ws, c, "Notes", title, k)
+        r += lines + 2
+    ws.column_dimensions["A"].width = 140

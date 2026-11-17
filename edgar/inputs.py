@@ -1,0 +1,141 @@
+"""Keep the user's inputs when a workbook is rebuilt.
+
+Every input cell is registered while the workbook is built (a key that describes it, its address and its
+generated default) and the list is saved in a hidden "_inputs" sheet. On the next build the old file is read:
+any registered cell whose value no longer equals its default was changed by the user, and is copied into the
+cell with the same key in the new workbook - so inputs survive new filings, extra years and layout changes.
+Workbooks made before this existed are read by their row labels instead (legacy_inputs)."""
+import json
+import shutil
+from datetime import date, datetime
+from pathlib import Path
+
+from openpyxl import load_workbook
+
+SHEET = "_inputs"
+
+
+class Registry:
+    def __init__(self):
+        self.items = {}          # key -> (sheet title, cell address, default value)
+
+    def add(self, ws, cell, *key):
+        k = "|".join(str(p) for p in key)
+        assert k not in self.items, f"duplicate input key {k}"
+        self.items[k] = (ws.title, cell.coordinate, cell.value)
+        return cell
+
+    def write(self, wb):
+        ws = wb.create_sheet(SHEET)
+        ws.append(["key", "sheet", "cell", "default (as generated)"])
+        for k, (sheet, addr, default) in self.items.items():
+            ws.append([k, sheet, addr, json.dumps(default, default=str)])
+        ws.sheet_state = "hidden"
+
+
+def _norm(v):
+    """Excel rewrites formulas slightly when it saves (drops quotes around simple sheet names, etc.)."""
+    if isinstance(v, str) and v.startswith("="):
+        return v.replace(" ", "").replace("'", "").replace("_xlfn.", "").upper()
+    return v
+
+
+def _same(a, b):
+    if isinstance(a, bool) or isinstance(b, bool):
+        return a == b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return abs(a - b) <= 1e-12 * max(1.0, abs(a), abs(b))
+    return _norm(a) == _norm(b)
+
+
+def _is_formula(v):
+    return isinstance(v, str) and v.startswith("=")
+
+
+def _usable(v):
+    return isinstance(v, (int, float, str, date, datetime)) and v != ""
+
+
+def _registered_edits(old):
+    """key -> (value, old sheet, old address) for registered cells the user changed."""
+    out = {}
+    for key, sheet, addr, default in old[SHEET].iter_rows(min_row=2, values_only=True):
+        if sheet not in old.sheetnames:
+            continue
+        v = old[sheet][addr].value
+        if _usable(v) and not _same(v, json.loads(default)):
+            out[key] = (v, sheet, addr)
+    return out
+
+
+LEGACY_DCF = ("Risk-free rate", "Equity risk premium", "Beta", "Pre-tax cost of debt", "Terminal growth",
+              "Exit EV/EBITDA multiple", "Mid-year convention (1 = on)")
+LEGACY_DCF_DEFAULTS = (0.0425, 0.055, 1.0, 0.05, 0.025, 15.0, 1)
+
+
+def _legacy_edits(old):
+    """Inputs from a workbook built before the _inputs sheet existed: typed numbers found by row label."""
+    out = {}
+    if "DCF" in old.sheetnames:
+        ws = old["DCF"]
+        for r in range(4, 30):
+            label, v = ws.cell(row=r, column=1).value, ws.cell(row=r, column=2).value
+            if label in LEGACY_DCF and isinstance(v, (int, float)) \
+                    and not _same(v, LEGACY_DCF_DEFAULTS[LEGACY_DCF.index(label)]):
+                out[f"DCF|{label}"] = (v, "DCF", f"B{r}")
+    if "Assumptions" in old.sheetnames:
+        ws = old["Assumptions"]
+        headers = {j: ws.cell(row=4, column=j).value for j in range(2, ws.max_column + 1)}
+        for r in range(5, ws.max_row + 1):
+            label = ws.cell(row=r, column=1).value
+            if label == "Price override ($)" and isinstance(ws.cell(row=r, column=2).value, (int, float)):
+                out["Market|Price override"] = (ws.cell(row=r, column=2).value, ws.title, f"B{r}")
+            if label == "Ticker" and ":" in str(ws.cell(row=r, column=2).value):
+                out["Market|Ticker"] = (ws.cell(row=r, column=2).value, ws.title, f"B{r}")   # e.g. XNAS:ISRG
+            if not isinstance(label, str) or label == "Market data":
+                continue
+            for j, h in headers.items():
+                v = ws.cell(row=r, column=j).value
+                if isinstance(h, str) and h.endswith("E") and isinstance(v, (int, float)) and v != 0:
+                    out[f"Live|{label}|{h}"] = (v, ws.title, ws.cell(row=r, column=j).coordinate)
+    return out
+
+
+def carry_over(old_path, wb, reg, reset=()):
+    """Copy the user's inputs from the previous workbook into the new one. Inputs whose key contains one of
+    the `reset` words (any case) are left at their new defaults instead.
+    Returns (kept, dropped): lists of (key, value) and (key, reason)."""
+    try:
+        old = load_workbook(old_path)
+    except Exception as e:                                   # unreadable file: build fresh, say so
+        return [], [("(whole file)", f"could not read {Path(old_path).name}: {e}")]
+    edits = _registered_edits(old) if SHEET in old.sheetnames else _legacy_edits(old)
+    kept, dropped = [], []
+    for key, (v, old_sheet, old_addr) in edits.items():
+        if any(w.lower() in key.lower() for w in reset):
+            dropped.append((key, f"reset to its default as asked (was {v})"))
+            continue
+        if key not in reg.items:
+            dropped.append((key, "no matching cell in the new layout (e.g. that forecast year is now actual)"))
+            continue
+        sheet, addr, default = reg.items[key]
+        if _same(v, default):
+            continue
+        if _is_formula(v) and (sheet, addr) != (old_sheet, old_addr):
+            dropped.append((key, f"your formula {v} was not moved because the layout changed - re-enter it"))
+            continue
+        wb[sheet][addr].value = v
+        kept.append((key, v))
+    return kept, dropped
+
+
+def backup(path):
+    """Copy an existing workbook to backups/<name>_<timestamp>.xlsx before it is overwritten."""
+    path = Path(path)
+    if not path.exists():
+        return None
+    folder = path.resolve().parent / "backups"
+    folder.mkdir(exist_ok=True)
+    dest = folder / f"{path.stem}_{datetime.now():%Y-%m-%d_%H%M%S}{path.suffix}"
+    shutil.copy2(path, dest)
+    return dest

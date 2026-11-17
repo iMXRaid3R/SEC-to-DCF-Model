@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+"""
+edgar_etl.py - Build a financial model workbook from SEC EDGAR (XBRL "company facts"):
+Assumptions (drivers + Bear/Base/Bull scenarios), Revenue Build, Income Statement, Balance Sheet, Cash Flow
+(historicals + LTM + linked forecast), DCF, Comps (when peers are given), Checks & Metrics, Mapping, and Raw.
+
+Usage:
+    pip install requests pandas openpyxl        (or prefix commands with: uv run --with requests --with pandas --with openpyxl)
+    python edgar_etl.py ISRG                                 # peers come from watchlist.json when listed there
+    python edgar_etl.py ISRG --peers SYK MDT BSX             # choose the peers for the Comps tab
+    python edgar_etl.py MSFT --years 8 --forecast-years 7 --out msft.xlsx
+    python edgar_etl.py --list holdings                      # build every ticker in a watchlist.json group
+    python edgar_etl.py --comps ISRG SYK MDT BSX             # standalone comps table
+    python edgar_etl.py ISRG --find accrued                  # list the company's tags to fill a "not reported" line
+    python edgar_etl.py --rollup                             # Portfolio.xlsx + valuation_log.csv from the built workbooks
+    python edgar_etl.py --fetch all                          # only download (tickers or watchlist.json groups, plus peers)
+    python edgar_etl.py AAPL --refresh                       # ignore today's cached download
+    python edgar_etl.py AAPL --offline                       # use ./cache as it is, no download
+
+Rebuilding over an existing workbook keeps what you typed: scenario inputs, per-year overrides, DCF inputs,
+segment revenue, price overrides. The old file is first copied to ./backups. Use --fresh to start clean.
+Add your own tabs in a separate file: sheets the script didn't create are not carried into a rebuild.
+
+SEC requires a descriptive User-Agent with contact info: put your email in a file named .edgar_email next to
+this script (or set EDGAR_EMAIL, or pass --email). It is sent only to sec.gov.
+Downloads are cached in ./cache for the rest of the day. Handles 10-K filers and foreign filers on 20-F / 40-F
+(US GAAP or IFRS, any reporting currency; annual figures only). The layout does not suit banks and insurers.
+"""
+import argparse
+import json
+import sys
+import time
+from datetime import date
+from pathlib import Path
+
+from edgar import sec
+from edgar.comps import build_comps, peer_rows
+from edgar.inputs import backup, carry_over
+from edgar.sec import DEFAULT_EMAIL, EdgarError, load_company, load_json
+from edgar.transform import find_tags, load_financials
+from edgar.xl_model import build_workbook, coverage_report, gap_report
+
+WATCHLIST = Path(__file__).resolve().parent / "watchlist.json"
+OVERRIDES = Path(__file__).resolve().parent / "overrides"
+
+
+def load_overrides(ticker):
+    """overrides/<TICKER>.json: extra tags for this company's line items, tried before the standard ones.
+    {"Accrued Liabilities": [["EmployeeRelatedLiabilitiesCurrent", "OtherAccruedLiabilitiesCurrent"]]}
+    (an inner list = add these together). Find tag names with:  python edgar_etl.py TICKER --find accrued"""
+    path = OVERRIDES / f"{ticker.upper()}.json"
+    if not path.exists():
+        return {}
+    from edgar.mapping import MAP_BY_LABEL
+    data = {k: v for k, v in json.loads(path.read_text(encoding="utf-8")).items() if not k.startswith("_")}
+    unknown = [k for k in data if k not in MAP_BY_LABEL]
+    if unknown:
+        raise EdgarError(f"{path.name}: unknown line item(s) {unknown}. Names must match the Mapping tab, e.g. "
+                         f"{list(MAP_BY_LABEL)[:3]}")
+    print(f"Using overrides/{path.name}: {', '.join(data)}")
+    return data
+
+
+def load_watchlist():
+    """watchlist.json is personal (git-ignored); watchlist.example.json is the starting point shipped with the code."""
+    for path in (WATCHLIST, WATCHLIST.with_name("watchlist.example.json")):
+        if path.exists():
+            if path != WATCHLIST:
+                print(f"(no watchlist.json yet: using {path.name}. Copy it to watchlist.json and edit it.)")
+            return json.loads(path.read_text(encoding="utf-8"))
+    return {}
+
+
+def _show(v):
+    if isinstance(v, float):
+        return f"{v:.4g}"
+    return str(v)
+
+
+def build_one(a, ticker, peers, out=None, quiet=False):
+    if a.json:
+        facts = load_json(a.json)
+        name = facts.get("entityName", "Company")
+        ticker = (ticker or name.split()[0]).upper()
+    else:
+        ticker, name, facts = load_company(ticker, a.email, a.refresh)
+    if a.find:
+        hits = find_tags(facts, a.find)
+        print(f"\nTags matching {' + '.join(a.find)} (latest annual value):" if hits else "\nNo matching tags.")
+        for end, tag, label, val, unit in hits:
+            print(f"  {end}  {val:>18,.0f} {unit:<11} {tag}   - {label[:60]}")
+        print(f"\nTo use one, add it to overrides/{ticker}.json, e.g. {{\"Interest Income\": [\"TagName\"]}}")
+        return
+    fin = load_financials(facts, ticker, name, a.years, load_overrides(ticker))
+    fin.adr_ratio = a.adr.get(ticker, 1)
+    erp = a.erp.get("by_ticker", {}).get(ticker, a.erp.get("default"))
+    if erp:
+        own = ticker in a.erp.get("by_ticker", {})
+        fin.erp = (float(erp), a.erp.get("source", "watchlist.json") + (f" (rate set for {ticker})" if own else ""))
+    if not a.json:
+        fin.symbol = sec.price_symbol(ticker, a.email, a.refresh)
+        fin.rf = sec.risk_free_rate(a.email, a.refresh)
+    age = (date.today() - fin.cols[-1].date()).days
+    if age > 500:
+        print(f"  ! Latest annual figures are for the year ended {fin.cols[-1].date()} ({age // 30} months ago): "
+              "the SEC's data doesn't include a newer annual report for this company yet, so the model is stale.")
+    if fin.currency != "USD":
+        print(f"Reports in {fin.currency} ({fin.annual_form}): the workbook converts the dollar share price; "
+              f"ordinary shares per US-listed share = {fin.adr_ratio:g} (watchlist.json \"adr_ratio\")")
+    rows = peer_rows(peers, a.email, a.refresh, skip={ticker}, adr=a.adr) if peers else []
+    wb, model = build_workbook(fin, a.forecast_years, rows)
+    out = Path(out or f"{ticker}_financials.xlsx")
+    if out.exists() and not a.fresh:
+        kept, dropped = carry_over(out, wb, model.reg, a.reset or ())
+        if kept:
+            print(f"Kept {len(kept)} of your inputs from the existing {out.name}:")
+            for k, v in kept:
+                print(f"    {k.replace('|', ' > ')} = {_show(v)}")
+        for k, why in dropped:
+            print(f"  ! not carried over: {k.replace('|', ' > ')} - {why}")
+    saved = backup(out)
+    wb.save(out)
+    print(f"Saved {out}" + (f"   (previous version: backups/{saved.name})" if saved else ""))
+    if not quiet:
+        coverage_report(model)
+    gap_report(model, facts)
+
+
+def fetch(a, wl, peer_map):
+    """Download company facts (and the exchange list and Treasury yield) into ./cache without building."""
+    groups = {k: v for k, v in wl.items() if isinstance(v, list)}
+    tickers = []
+    for name in a.fetch:
+        tickers += [t for v in groups.values() for t in v] if name == "all" else groups.get(name, [name])
+    tickers += [p for t in list(tickers) for p in peer_map.get(t.upper(), [])]
+    ok, failed = 0, []
+    for t in dict.fromkeys(x.upper() for x in tickers):
+        try:
+            load_company(t, a.email, a.refresh)
+            ok += 1
+        except Exception as e:
+            failed.append(t)
+            print(f"  {t}: {type(e).__name__}: {e}")
+        time.sleep(0.15)                    # stay under the SEC's 10 requests/second
+    sec.price_symbol("AAPL", a.email, a.refresh)
+    rf, day = sec.risk_free_rate(a.email, a.refresh)
+    print(f"\nDownloaded or already cached: {ok} companies" + (f"; failed: {', '.join(failed)}" if failed else ""))
+    print(f"10-year Treasury yield: {rf:.2%} as of {day}" if rf else "10-year Treasury yield: not available")
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("ticker", nargs="?", help="Ticker, e.g. AAPL")
+    p.add_argument("--email", default=DEFAULT_EMAIL,
+                   help="Your email (SEC User-Agent requirement; default: .edgar_email file or EDGAR_EMAIL)")
+    p.add_argument("--years", type=int, default=5, help="Number of historical fiscal years (default 5)")
+    p.add_argument("--forecast-years", type=int, default=10, help="Number of forecast years (default 10)")
+    p.add_argument("--out", help="Output .xlsx path (default <TICKER>_financials.xlsx, or comps.xlsx)")
+    p.add_argument("--json", help="Load a saved companyfacts JSON (.json or .json.gz) instead of calling SEC")
+    p.add_argument("--refresh", action="store_true", help="Download again even if cached today")
+    p.add_argument("--offline", action="store_true", help="Use ./cache whatever its age; never call sec.gov")
+    p.add_argument("--peers", nargs="+", metavar="TICKER",
+                   help="Peers for the Comps tab (default: this ticker's list in watchlist.json)")
+    p.add_argument("--no-peers", action="store_true", help="Skip the Comps tab")
+    p.add_argument("--fresh", action="store_true", help="Don't carry inputs over from an existing workbook")
+    p.add_argument("--reset", nargs="+", metavar="WORD",
+                   help="Put typed inputs whose name contains one of these words back to their defaults, "
+                        "e.g. --reset Beta  or  --reset \"Risk-free\"")
+    p.add_argument("--list", metavar="GROUP", help="Build every ticker in this watchlist.json group "
+                                                   "(e.g. holdings, watchlist, or all)")
+    p.add_argument("--comps", nargs="+", metavar="TICKER", help="Build a standalone comps table for these tickers")
+    p.add_argument("--rollup", nargs="*", metavar="TICKER_OR_GROUP",
+                   help="Read every built workbook through Excel (Bear/Base/Bull) and write Portfolio.xlsx plus a "
+                        "row per company in valuation_log.csv. Optionally limit to tickers or watchlist.json groups")
+    p.add_argument("--base-only", action="store_true",
+                   help="With --rollup: read only the Base scenario (about a third of the time; no Bear/Bull range)")
+    p.add_argument("--find", nargs="+", metavar="WORD",
+                   help="List this company's XBRL tags whose name or label contains every word, to fill a "
+                        "'not reported' line via overrides/<TICKER>.json. Builds nothing")
+    p.add_argument("--fetch", nargs="+", metavar="TICKER_OR_GROUP",
+                   help="Only download SEC data into ./cache for these tickers or watchlist.json groups "
+                        "(holdings, watchlist, all) and their peers; builds nothing")
+    a = p.parse_args()
+    if a.forecast_years < 3:
+        p.error("--forecast-years must be at least 3")
+    sec.OFFLINE = a.offline
+    wl = load_watchlist()
+    peer_map = {k.upper(): v for k, v in wl.get("peers", {}).items()}
+    a.adr = {k.upper(): v for k, v in wl.get("adr_ratio", {}).items()}
+    a.erp = dict(wl.get("equity_risk_premium", {}))
+    a.erp["by_ticker"] = {k.upper(): v for k, v in a.erp.get("by_ticker", {}).items()}
+
+    def peers_for(ticker):
+        if a.no_peers:
+            return []
+        return a.peers or peer_map.get((ticker or "").upper(), [])
+
+    try:
+        if a.rollup is not None:
+            from edgar.rollup import rollup
+            groups = {k: v for k, v in wl.items() if isinstance(v, list)}
+            names = [t for g in a.rollup for t in (groups.get(g, [g]) if g != "all" else sum(groups.values(), []))]
+            rollup(Path(__file__).resolve().parent, names or None, a.base_only)
+        elif a.fetch:
+            fetch(a, wl, peer_map)
+        elif a.comps:
+            wb = build_comps(a.comps, a.email, a.refresh)
+            out = a.out or "comps.xlsx"
+            wb.save(out)
+            print(f"Saved {out}")
+        elif a.list:
+            groups = {k: v for k, v in wl.items() if isinstance(v, list)}
+            tickers = [t for v in groups.values() for t in v] if a.list == "all" else groups.get(a.list)
+            if not tickers:
+                p.error(f"no group '{a.list}' in {WATCHLIST.name} (have: {', '.join(groups) or 'none'})")
+            failed = []
+            for t in dict.fromkeys(tickers):
+                print(f"\n=== {t} ===")
+                try:
+                    build_one(a, t, peers_for(t), quiet=True)
+                except EdgarError as e:
+                    failed.append((t, str(e)))
+                    print(f"  skipped: {e}")
+                except PermissionError as e:
+                    failed.append((t, f"{e.filename} is open in Excel"))
+                    print(f"  skipped: close {e.filename} in Excel and run again")
+            if failed:
+                print("\nNot built: " + ", ".join(t for t, _ in failed))
+        elif a.json or a.ticker:
+            build_one(a, a.ticker, peers_for(a.ticker), a.out)
+        else:
+            p.error("give a ticker, --list GROUP, --json FILE, or --comps TICKER ...")
+    except (EdgarError, RuntimeError) as e:
+        sys.exit(str(e))
+    except PermissionError as e:
+        sys.exit(f"Could not write {e.filename} - close it in Excel and run again.")
+
+
+if __name__ == "__main__":
+    main()
