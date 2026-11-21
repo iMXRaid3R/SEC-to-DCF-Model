@@ -43,7 +43,7 @@ The three linked statements, with the Drivers, Inputs and Checks tabs, are alway
 
 | Part | Tab | Switch it off with |
 |---|---|---|
-| DCF | DCF: WACC, two terminal values, sensitivity grids, reverse DCF | `--no-dcf` |
+| DCF | WACC, DCF and Bridge tabs: discount rate, two terminal values, sensitivity grids, reverse DCF | `--no-dcf` |
 | Multiples | Multiples: forward P/E, PEG, EV/EBITDA, EV/Sales, price / free cash flow | `--no-multiples` |
 | Comps | Comps: peers' multiples (needs peers in `watchlist.json` or `--peers`) | `--no-comps` |
 | Revenue Build | Revenue Build: segment-by-segment revenue | `--no-revenue-build` |
@@ -92,15 +92,18 @@ The SEC's data updates when the 10-Q or 10-K is filed, which can be days or week
 | Tab | Purpose |
 |---|---|
 | Summary | A one-screen dashboard: headline cards (price, price target, upside, 12-month target, scenario, checks), snapshot, valuation inputs and FCF yield panels, value per share by method with your weights, the football-field and revenue-and-margin charts, your thesis from Notes, what the price implies, today's multiples, key figures |
-| Inputs | Scenario, price and currency, dilution and beta are set here; every other setting is listed with a link to the tab where it is typed |
-| Drivers | Yearly growth and margin paths, and the Bear / Base / Bull table that sets them |
+| Inputs | The control panel: scenario, price and currency, shares outstanding; every other setting is listed with its value and a link to the tab where it is typed |
+| Scenarios | Bear / Base / Bull: each driver's year-1, mid-point and final-year values, your overrides of them, and the scenario probabilities |
+| Drivers | The yearly growth and margin paths the model uses (history, then the selected scenario), your per-year overrides, and the results for the selected scenario |
 | Revenue Build | Optional segment build that replaces the single revenue growth driver |
 | Income Statement, Balance Sheet, Cash Flow | Five years of history, LTM, year to date, ten forecast years; subtotals ruled, and growth and margins in grey under the income statement's key lines |
 | WACC | The discount rate: risk-free rate, equity risk premium and beta (measured from prices, with its window), cost of debt with last year's interest / debt for reference, market-value weights, and the WACC |
+| Bridge | From enterprise value to value per share: debt (with leases if you choose), cash, other owners' interests, other assets and claims, and the diluted share count with options and stock units |
 | DCF | Results first, then its settings (terminal growth, exit multiple, method choices) and the bridge to equity, free cash flow, two terminal-value methods, the two sensitivity grids side by side, reverse DCF |
 | Multiples | Next-twelve-months EPS, EBITDA, revenue and free cash flow; a target multiple with a low-high range for each method, and an On / Off switch. Beside each: today's price on your forecast (next twelve months), today's price on reported results (last twelve months) and the peer median, which is also trailing, so the last two compare like with like |
 | Comps | Peers, their multiples, and the value they imply |
-| Checks & Metrics | Balance checks with a green tick or red cross each, and ratios |
+| Ratios | Growth, margins, returns (ROE, ROIC, ROA), cash flow, leverage and per-share figures, history and forecast |
+| Checks | The balance checks, each with a green tick or red cross |
 | Notes | Your thesis and sources (column A is kept across rebuilds) |
 | Mapping, Raw | Which filing tag fed each number |
 
@@ -120,7 +123,7 @@ there is one:
 |---|---|---|
 | DCF settings | Default column (e.g. beta from prices, exit multiple from peers) | Your override column |
 | Multiples | Default target (peer median or a set multiple) | Your target; Range +/- sets Low / High |
-| Drivers, Bear / Base / Bull | Scenario inputs (defaults) table | Your overrides table below it, same layout |
+| Scenarios, Bear / Base / Bull | Scenario inputs (defaults) table | Your overrides table below it, same layout |
 | Drivers, single years | The scenario path in the rows at the top | Your overrides by year (that year is shaded orange at the top) |
 | Revenue Build | Segment growth = Drivers revenue growth | Your growth overrides |
 | Summary | Return to roll the target forward (grey) | The yellow cell next to it |
@@ -213,6 +216,7 @@ edgar/layout.py     every row of every sheet and its formulas
 edgar/xl_*.py       sheet writers (model, inputs, DCF, summary, revenue build)
 edgar/xl_multiples.py  the Multiples tab
 edgar/xl_wacc.py    the WACC tab
+edgar/xl_bridge.py  the Bridge tab (enterprise value to value per share)
 edgar/parts.py      which optional parts a build includes
 edgar/menu.py       the menu shown by ./run with no arguments
 edgar/xl_fin.py     the financials template (banks, insurers)

@@ -38,6 +38,12 @@ for the Revenue Build link). The parts a workbook was built with are stored as t
 `_inputs`; inputs of a switched-off part are "(parked)" rows there (`inputs.PART_TABS`). `menu.py` only builds
 argument lists for `main(argv)`.
 
+Tabs: Summary | Inputs (control panel) | Scenarios, Drivers, Revenue Build | the statements, Ratios | WACC, Bridge,
+DCF, Multiples, Comps | Checks | Notes, Mapping, Raw. The Bridge tab (`xl_bridge.py`, built with the DCF or
+Multiples) is the only place for debt, cash, NCI, other claims and the diluted share count; read it with
+`xl_bridge.ref(...)`. Scenario tables and probabilities sit on Scenarios (`Grid.scen_*`, `Grid.prob_rows`);
+ratios on Ratios (`layout.RATIO_GROUPS`, sheet key "RAT").
+
 The WACC tab (`xl_wacc.py`, built with the DCF part) holds the discount-rate settings and the beta measurement;
 the DCF's `wacc` row links to it. Cost of equity and the risk-free rate are `xl_wacc.ref("ke")` / `ref("rf")`.
 
@@ -82,7 +88,7 @@ any new input and it is highlighted and carried over. Only registered cells are 
 - **Fallback formulas can create circular references.** `Row.fallback` fires when its `needs` are available,
   including through other fallbacks. Check the three equity lines (parent, noncontrolling, total) before adding one.
 - **Balance-sheet integrity.** Forecast cash is the plug; every other balance-sheet change must flow through
-  the cash flow statement. `Checks & Metrics` must read "ALL CHECKS OK" for the fixtures and for a sample of
+  the cash flow statement. `Checks` must read "ALL CHECKS OK" for the fixtures and for a sample of
   real companies after any change to `layout.py`.
 
 ## Data quirks already handled (do not undo)

@@ -10,7 +10,7 @@ from .xl_summary import WEIGHTS
 from .rollup import MULT_METHODS, SCENARIOS, _mid, _num, to_row
 
 BLOCKS = {"summary": ("Summary", "A1:L120"), "inputs": (SHEET_NAMES["INP"], "A1:B70"),
-          "drivers": (SHEET_NAMES["A"], "A1:M140"), "notes": ("Notes", "A1:A60")}
+          "drivers": (SHEET_NAMES["SCN"], "A1:M80"), "notes": ("Notes", "A1:A60")}
 KEY_DRIVERS = ("Revenue growth", "Gross margin", "R&D % of revenue", "SG&A % of revenue", "Tax rate",
                "Capex % of revenue", "Return on equity", "Dividends % of net income", "Buybacks % of net income")
 

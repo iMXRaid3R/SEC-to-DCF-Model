@@ -581,7 +581,7 @@ def _revenue_chart(ws, m, row, anchor=None):
     ws.add_chart(bars, anchor or f"A{row}")
 
 
-BANNER_TABS = ("Inputs", "Drivers", "WACC", "DCF", "Multiples", "Revenue Build", "Comps")
+BANNER_TABS = ("Inputs", "Scenarios", "Drivers", "WACC", "Bridge", "DCF", "Multiples", "Revenue Build", "Comps")
 
 
 def write_banners(wb, m):

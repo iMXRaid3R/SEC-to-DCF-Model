@@ -1,4 +1,4 @@
-"""LOAD: build the model workbook (Assumptions, IS, BS, CF, DCF, Checks & Metrics, Mapping, Raw)."""
+"""LOAD: build the model workbook (see TAB_ORDER for the tabs)."""
 import json
 from datetime import date
 
@@ -38,6 +38,7 @@ class Model:
         self.reg = Registry()   # every input cell, so a rebuild can keep what the user typed
         self.comps = None       # {multiple: peer-median cell reference} when a Comps tab is built
         self.parts = set(PARTS)  # optional parts built (parts.py)
+        self.bridge = False      # True when the Bridge tab is built (it then holds the dilution inputs)
         for col in self.grid.cols:
             if col.kind == "hist":
                 for label, series in fin.values.items():
@@ -162,11 +163,12 @@ def _dropdown(ws, addr, label_addr, label, value, options):
     return c
 
 
-def write_assumptions(ws, m):
+def write_assumptions(ws, m, wss):
+    """Drivers tab (ws) and Scenarios tab (wss)."""
     g, fin = m.grid, m.fin
     write_header(ws, g, f"{fin.name} ({fin.ticker}) - Drivers",
-                 "Forecast columns follow the selected scenario's year-1, mid-point and final-year values (table "
-                 "below). " + st.INPUT_LEGEND + " To change a driver, use the Your overrides tables further down; "
+                 "Forecast columns follow the selected scenario's year-1, mid-point and final-year values (Scenarios "
+                 "tab). " + st.INPUT_LEGEND + " To fix one driver in one year, use Your overrides by year below; "
                  "a year you have overridden is shaded orange here.", first="Driver")
     # The scenario and the base-case starting point are chosen on the Inputs tab; shown here for reference
     # (the formulas on this tab read these two cells).
@@ -186,7 +188,8 @@ def write_assumptions(ws, m):
     # ---- live driver rows: history = actual ratios, forecast = path through the selected scenario's three points
     hist3, last, n = g.hist[-3:], g.last_fy, len(g.fcst)
     mid = (n + 1) // 2                                   # forecast year the "Mid" input applies to (5 of 10)
-    SEL = ("K", "L", "M")                                # Selected: year 1, mid, final
+    SEL = ("K", "L", "M")                                # Selected: year 1, mid, final (on the Scenarios tab)
+    SCN, DRV = f"{SHEET_NAMES['SCN']}!", f"{SHEET_NAMES['A']}!"
     for row in DRIVER_ROWS:
         r, sr = g.rows[row.label][1], g.scen_rows[row.label]
         ws.cell(row=r, column=1, value=row.label)
@@ -200,7 +203,7 @@ def write_assumptions(ws, m):
                 continue
             cell.fill = st.FCST_BG
             k = g.fcst.index(col) + 1                    # forecast year 1..n
-            y1, ym, yn = (f"${L}${sr}" for L in SEL)
+            y1, ym, yn = (f"{SCN}${L}${sr}" for L in SEL)
             if k == 1:
                 path = f"{y1}"
             elif k <= mid:
@@ -219,47 +222,50 @@ def write_assumptions(ws, m):
             FormulaRule(formula=[f'{g.fcst[0].L}${orow}<>""'], font=st.font(st.BLUE, True), fill=st.OVERRIDDEN_FILL))
 
     # ---- scenario inputs: year 1, a mid-point and the final year for Bear / Base / Bull, plus the selected set
+    s_pick = f'MATCH({input_ref("Scenario")},{_choices(SCENARIOS)},0)'
+    s_basis = f'MATCH({input_ref("Basis")},{_choices(BASIS_OPTIONS)},0)'
+    _scenarios_top(wss, m)
     t = g.scen_title
     points = ("Year 1", "Mid", "Final year")
     heads = (g.fcst[0].header, g.fcst[mid - 1].header, g.fcst[-1].header)
-    ws.cell(row=t, column=1, value="Scenario inputs (defaults)").font = st.font(bold=True)
-    ws.cell(row=t, column=2, value="Each driver runs in straight lines from the first forecast year to the mid-point to "
+    st.section(wss, t, 1, 13, "Scenario inputs (defaults)")
+    st.hover_note(wss.cell(row=t + 1, column=15), "Each driver runs in straight lines from the first forecast year to the mid-point to "
                                    "the final year, which should be a steady state. Base year 1 comes from history "
                                    "(\"Base starts from\"); growth fades toward the terminal growth; Bear and "
                                    "Bull default to Base -/+ a spread on growth, gross margin and SG&A. To change "
-                                   "one, use the Your overrides table below.").font = st.NOTE_FONT
-    st.header_cell(ws.cell(row=t + 1, column=1), "")
-    st.header_cell(ws.cell(row=t + 2, column=1), "Driver")
+                                   "one, use the Your overrides table below.", keep=0).font = st.NOTE_FONT
+    st.header_cell(wss.cell(row=t + 1, column=1), "")
+    st.header_cell(wss.cell(row=t + 2, column=1), "Driver")
     for i, name in enumerate(SCENARIOS + ("Selected",)):
         for k, sub in enumerate(heads):
             j = 2 + 3 * i + k
-            st.header_cell(ws.cell(row=t + 1, column=j), name, "ltm" if name == "Selected" else "label")
-            st.header_cell(ws.cell(row=t + 2, column=j), sub, "ltm" if name == "Selected" else "label")
+            st.header_cell(wss.cell(row=t + 1, column=j), name, "ltm" if name == "Selected" else "label")
+            st.header_cell(wss.cell(row=t + 2, column=j), sub, "ltm" if name == "Selected" else "label")
     g_term = input_ref("g")
     ot = g.scen_ovr_title
-    ws.cell(row=ot, column=1, value="Your overrides").font = st.font(bold=True)
-    ws.cell(row=ot, column=2, value="Type a value to replace the default in the same place in the table above; "
+    st.section(wss, ot, 1, 10, "Your overrides")
+    st.hover_note(wss.cell(row=ot + 1, column=12), "Type a value to replace the default in the same place in the table above; "
                                     "clear it to go back to the default. Bear and Bull defaults follow your Base "
-                                    "overrides.").font = st.NOTE_FONT
-    st.header_cell(ws.cell(row=ot + 1, column=1), "")
-    st.header_cell(ws.cell(row=ot + 2, column=1), "Driver")
+                                    "overrides.", keep=0).font = st.NOTE_FONT
+    st.header_cell(wss.cell(row=ot + 1, column=1), "")
+    st.header_cell(wss.cell(row=ot + 2, column=1), "Driver")
     for i, name in enumerate(SCENARIOS):
         for k, sub in enumerate(heads):
-            st.header_cell(ws.cell(row=ot + 1, column=2 + 3 * i + k), name, "ltm")
-            st.header_cell(ws.cell(row=ot + 2, column=2 + 3 * i + k), sub, "ltm")
+            st.header_cell(wss.cell(row=ot + 1, column=2 + 3 * i + k), name, "ltm")
+            st.header_cell(wss.cell(row=ot + 2, column=2 + 3 * i + k), sub, "ltm")
     for row in DRIVER_ROWS:
         r, sr = g.rows[row.label][1], g.scen_rows[row.label]
         orow = g.scen_ovr_rows[row.label]
         u = lambda L, sr=sr, orow=orow: f'IF({L}{orow}="",{L}{sr},{L}{orow})'      # the value in use
-        ws.cell(row=sr, column=1, value=row.label)
-        ws.cell(row=orow, column=1, value=row.label)
+        wss.cell(row=sr, column=1, value=row.label)
+        wss.cell(row=orow, column=1, value=row.label)
         if row.default == "zero":
             base1 = 0
         else:
             err = row.err_default
-            fy = f'IF({last.L}{r}="",{err},{last.L}{r})'
-            ltm = f'IF({g.ltm.L}{r}="",{fy},{g.ltm.L}{r})' if g.ltm is not None else fy
-            pickd = f"IFERROR(CHOOSE({basis_pick},AVERAGE({hist3[0].L}{r}:{hist3[-1].L}{r}),{fy},{ltm}),{err})"
+            fy = f'IF({DRV}{last.L}{r}="",{err},{DRV}{last.L}{r})'
+            ltm = f'IF({DRV}{g.ltm.L}{r}="",{fy},{DRV}{g.ltm.L}{r})' if g.ltm is not None else fy
+            pickd = (f"IFERROR(CHOOSE({s_basis},AVERAGE({DRV}{hist3[0].L}{r}:{hist3[-1].L}{r}),{fy},{ltm}),{err})")
             base1 = f"=MIN({row.base_cap},{pickd})" if row.base_cap is not None else f"={pickd}"
         if row.label == "Revenue growth":
             # Growth halves by the mid-point and is halfway to the terminal rate by the final year, never below it.
@@ -280,22 +286,24 @@ def write_assumptions(ws, m):
                   "Bull": tuple(shifted(u(L), 1) for L in "EFG")}
         for i, name in enumerate(SCENARIOS):
             for k, sub in enumerate(points):
-                c = ws.cell(row=sr, column=2 + 3 * i + k, value=values[name][k])
+                c = wss.cell(row=sr, column=2 + 3 * i + k, value=values[name][k])
                 c.number_format = st.FMT[row.fmt]
                 c.font = st.formula_font(c.value) if isinstance(c.value, str) else st.font()
-                o = ws.cell(row=orow, column=2 + 3 * i + k)
+                o = wss.cell(row=orow, column=2 + 3 * i + k)
                 o.number_format = st.FMT[row.fmt]
-                m.reg.add(ws, o, "Scenario", row.label, name, sub)
+                m.reg.add(wss, o, "Scenario", row.label, name, sub)
         for k, cols in enumerate((("B", "E", "H"), ("C", "F", "I"), ("D", "G", "J"))):
-            c = ws.cell(row=sr, column=11 + k, value=f"=CHOOSE({pick}," + ",".join(u(L) for L in cols) + ")")
+            c = wss.cell(row=sr, column=11 + k, value=f"=CHOOSE({s_pick}," + ",".join(u(L) for L in cols) + ")")
             c.number_format, c.font = st.FMT[row.fmt], st.font(bold=True)
+
+    _scenarios_layout(wss, m)
 
     # ---- headline results for the selected scenario (flip the Scenario dropdown to compare).
     # Not an Excel Data Table: with the live STOCKHISTORY price in the chain, a data table makes Excel
     # recalculate for a minute or more after every edit.
     v = g.val_title
     ws.cell(row=v, column=1, value="Results for the selected scenario").font = st.font(bold=True)
-    ws.cell(row=v, column=2, value="Change the Scenario dropdown (F1) to see Bear / Base / Bull.").font = st.NOTE_FONT
+    ws.cell(row=v, column=2, value="Change the scenario on the Inputs tab to see Bear / Base / Bull.").font = st.NOTE_FONT
     heads = []
     if "dcf" in m.parts:
         heads += [("DCF: perpetuity growth", xl_dcf.ref("per_share", "B"), "price"),
@@ -338,24 +346,63 @@ def write_assumptions(ws, m):
     ws.column_dimensions[get_column_letter(g.cols[-1].j + 1)].width = 60
 
 
+def _scenarios_top(wss, m):
+    """Scenarios tab: title, the scenario in use, and the probabilities the roll-up uses for a weighted value."""
+    g, fin = m.grid, m.fin
+    wss["A1"], wss["A1"].font = f"{fin.name} ({fin.ticker}) - Scenarios", st.TITLE_FONT
+    wss["A2"] = ("Bear, Base and Bull: each driver's year-1, mid-point and final-year values. The Drivers tab runs "
+                 "the selected scenario through every forecast year. " + st.INPUT_LEGEND)
+    wss["A2"].font = st.NOTE_FONT
+    st.section(wss, 4, 1, 4, "Scenario probabilities")
+    names = {"w_bear": ("Bear", 0.25), "w_base": ("Base", 0.5), "w_bull": ("Bull", 0.25)}
+    for key, (name, w) in names.items():
+        r = g.prob_rows[key]
+        wss.cell(row=r, column=1, value=f"Probability: {name}")
+        c = wss.cell(row=r, column=2, value=w)
+        c.number_format = st.FMT["pct"]
+        m.reg.add(wss, c, "Inputs", f"Probability: {name}")
+    r = g.prob_rows["w_total"]
+    wss.cell(row=r, column=1, value="Probabilities add up to").font = st.font(bold=True)
+    c = wss.cell(row=r, column=2, value=f"=SUM(B{g.prob_rows['w_bear']}:B{g.prob_rows['w_bull']})")
+    c.number_format, c.font = st.FMT["pct"], st.font(bold=True)
+    wss.cell(row=r, column=3, value=f'=IF(ABS(B{r}-1)>0.0001,"Should be 100%","")').font = Font(color="C00000", bold=True)
+    wss.cell(row=g.prob_rows["w_bear"], column=4,
+             value="Used by the portfolio roll-up and the write-up for a probability-weighted value and target "
+                   "(the workbook shows one scenario at a time)").font = st.NOTE_FONT
+    wss["F4"], wss["F4"].font = "Scenario in use:", st.font(bold=True)
+    wss["G4"] = f"={input_ref('Scenario')}"
+    wss["G4"].font = st.font(st.GREEN, True)
+    st.link_to(wss["H4"], SHEET_NAMES["INP"], f"B{INPUT_ROWS['Scenario']}", "(change on the Inputs tab)")
+    st.row_rules(wss, list(g.prob_rows.values()), 2)
+    wss.column_dimensions["A"].width = 34
+    for j in range(2, 14):
+        wss.column_dimensions[get_column_letter(j)].width = 11
+    wss.freeze_panes = "B4"
+
+
 def _drivers_layout(ws, m):
-    """Row separators, and the three lower blocks as collapsible groups (the +/- buttons in the margin)."""
+    """Row separators on Drivers; the per-year overrides as a collapsible group (the +/- button in the margin)."""
     g = m.grid
     last = g.cols[-1].j
     st.row_rules(ws, [g.rows[r.label][1] for r in DRIVER_ROWS], last)
-    st.row_rules(ws, list(g.scen_rows.values()) + list(g.scen_ovr_rows.values()), 13)
     st.row_rules(ws, list(g.year_ovr_rows.values()), last)
     ws.sheet_properties.outlinePr.summaryBelow = False
-    for title, first, end in ((g.scen_title, g.scen_title + 1, max(g.scen_rows.values())),
-                              (g.scen_ovr_title, g.scen_ovr_title + 1, max(g.scen_ovr_rows.values())),
-                              (g.year_ovr_title, g.year_ovr_title + 1, max(g.year_ovr_rows.values()))):
-        ws.row_dimensions.group(first, end, outline_level=1, hidden=False)
-        ws.cell(row=title, column=1).font = Font(bold=True, size=12, color=st.THEME["accent"])
+    ws.row_dimensions.group(g.year_ovr_title + 1, max(g.year_ovr_rows.values()), outline_level=1, hidden=False)
+    ws.cell(row=g.year_ovr_title, column=1).font = Font(bold=True, size=12, color=st.THEME["accent"])
+
+
+def _scenarios_layout(wss, m):
+    g = m.grid
+    st.row_rules(wss, list(g.scen_rows.values()) + list(g.scen_ovr_rows.values()), 13)
+    wss.sheet_properties.outlinePr.summaryBelow = False
+    for first, end in ((g.scen_title + 1, max(g.scen_rows.values())),
+                       (g.scen_ovr_title + 1, max(g.scen_ovr_rows.values()))):
+        wss.row_dimensions.group(first, end, outline_level=1, hidden=False)
 
 
 def write_checks(ws, m):
     g = m.grid
-    write_header(ws, g, "Model Integrity Checks & Metrics",
+    write_header(ws, g, f"{m.fin.name} ({m.fin.ticker}) - Checks",
                  "Checks are live formulas and should all be 0 (n/a = an input isn't reported).")
     first, last = g.rows[CHECK_ROWS[0].label][1], g.rows[CHECK_ROWS[-1].label][1]
     rng = f"B{first}:{g.cols[-1].L}{last}"
@@ -385,9 +432,23 @@ def write_checks(ws, m):
                                                                            fill=st.WARN_FILL))
     ws.conditional_formatting.add(rng, FormulaRule(formula=[f'AND(ISNUMBER(B{first}),ABS(B{first})>$G$1)'],
                                                    font=Font(color="B42318", bold=True)))
-    st.section(ws, g.metric_header, 1, g.cols[-1].j, "Metrics")
-    write_rows(ws, "CHK", METRIC_ROWS, m)
-    st.row_rules(ws, [g.rows[r.label][1] for r in CHECK_ROWS + METRIC_ROWS], g.cols[-1].j)
+    st.row_rules(ws, [g.rows[r.label][1] for r in CHECK_ROWS], g.cols[-1].j)
+
+
+def write_ratios(ws, m):
+    g, fin = m.grid, m.fin
+    write_header(ws, g, f"{fin.name} ({fin.ticker}) - Ratios",
+                 "Growth, margins, returns, cash flow, leverage and per-share figures, for history and the forecast "
+                 "(shaded). Nothing to type here.")
+    for title, hr in g.ratio_headings.items():
+        st.section(ws, hr, 1, g.cols[-1].j, title, size=11)
+    write_rows(ws, "RAT", METRIC_ROWS, m)
+    for r in METRIC_ROWS:
+        ws.cell(row=g.rows[r.label][1], column=1).alignment = Alignment(indent=1)
+        if r.note:
+            st.hover_note(ws.cell(row=g.rows[r.label][1], column=g.cols[-1].j + 1), r.note).font = st.NOTE_FONT
+    st.row_rules(ws, [g.rows[r.label][1] for r in METRIC_ROWS], g.cols[-1].j)
+    ws.column_dimensions[get_column_letter(g.cols[-1].j + 1)].width = 50
 
 
 def write_mapping(ws, fin):
@@ -420,12 +481,14 @@ def write_raw(ws, src):
     ws.freeze_panes = "A2"
 
 
-TAB_COLORS = {"Summary": "1F3864", "Inputs": "BF8F00", "Drivers": "BF8F00", RB_SHEET: "BF8F00",
-              "Income Statement": "1E5C4F", "Balance Sheet": "1E5C4F", "Cash Flow": "1E5C4F",
-              "WACC": "7030A0", "DCF": "7030A0", "Multiples": "7030A0", "Comps": "7030A0", "Checks & Metrics": "7030A0",
+TAB_COLORS = {"Summary": "1F3864", "Inputs": "BF8F00", "Scenarios": "BF8F00", "Drivers": "BF8F00", RB_SHEET: "BF8F00",
+              "Income Statement": "1E5C4F", "Balance Sheet": "1E5C4F", "Cash Flow": "1E5C4F", "Ratios": "1E5C4F",
+              "WACC": "7030A0", "Bridge": "7030A0", "DCF": "7030A0", "Multiples": "7030A0", "Comps": "7030A0",
+              "Checks": "808080",
               "Notes": "808080", "Mapping": "808080", "Raw": "808080"}
-TAB_ORDER = ["Summary", "Inputs", "Drivers", RB_SHEET, "Income Statement", "Balance Sheet", "Cash Flow", "WACC",
-             "DCF", "Multiples", "Comps", "Checks & Metrics", "Notes", "Mapping", "Raw", xl_dcf.CALC_SHEET]
+TAB_ORDER = ["Summary", "Inputs", "Scenarios", "Drivers", RB_SHEET, "Income Statement", "Balance Sheet", "Cash Flow",
+             "Ratios", "WACC", "Bridge", "DCF", "Multiples", "Comps", "Checks", "Notes", "Mapping", "Raw",
+             xl_dcf.CALC_SHEET]
 
 
 def build_workbook(fin, n_fcst=10, peers=(), template=None, parts=None):
@@ -447,18 +510,24 @@ def build_workbook(fin, n_fcst=10, peers=(), template=None, parts=None):
     m.grid.rev_build = "revenue_build" in parts
     wanted = {"DCF": "dcf", "WACC": "dcf", xl_dcf.CALC_SHEET: "dcf", "Multiples": "multiples", "Comps": "comps",
               RB_SHEET: "revenue_build"}
+    m.bridge = bool({"dcf", "multiples"} & parts)          # the Bridge tab serves both
     wb = Workbook()
     wb.active.title = SHEET_NAMES["A"]
     for name in TAB_ORDER:
         if name in wanted and wanted[name] not in parts:
             continue
+        if name == "Bridge" and not m.bridge:
+            continue
         if name not in wb.sheetnames:
             wb.create_sheet(name)
     wb._sheets = [wb[n] for n in TAB_ORDER if n in wb.sheetnames]
-    sheets = {key: wb[SHEET_NAMES[key]] for key in ("A", "IS", "BS", "CF", "CHK", "SUM", "INP")}
+    sheets = {key: wb[SHEET_NAMES[key]] for key in ("A", "IS", "BS", "CF", "CHK", "SUM", "INP", "SCN", "RAT")}
     if "comps" in parts:
         m.comps = write_comps(list(peers), wb["Comps"], subject=_metrics(fin),
                               price_ref=Ctx(m.grid, "CMP", m.grid.last_fy).market("Share price"), reg=m.reg)
+    if m.bridge:
+        from .xl_bridge import write_bridge
+        write_bridge(wb["Bridge"], m)
     if "dcf" in parts:
         write_dcf(wb["DCF"], m, wb[xl_dcf.CALC_SHEET])     # declares the valuation settings shown on Inputs
         from .xl_wacc import write_wacc
@@ -468,7 +537,7 @@ def build_workbook(fin, n_fcst=10, peers=(), template=None, parts=None):
         # the forecast still needs a long-run growth rate: revenue growth fades toward it
         m.settings["g"] = {"label": "Terminal growth", "value": xl_dcf.DEFAULTS["g"], "fmt": "pct",
                            "note": "Long-run growth: the revenue growth path on the Drivers tab fades toward it"}
-    write_assumptions(sheets["A"], m)
+    write_assumptions(sheets["A"], m, sheets["SCN"])
     if "revenue_build" in parts:
         write_build(wb[RB_SHEET], m, write_header)
     for key, rows in STATEMENTS:
@@ -477,6 +546,7 @@ def build_workbook(fin, n_fcst=10, peers=(), template=None, parts=None):
         xl_multiples.write_multiples(wb["Multiples"], m)
     write_inputs(sheets["INP"], m)                 # after the DCF: it places the settings the DCF declared
     write_checks(sheets["CHK"], m)
+    write_ratios(sheets["RAT"], m)
     write_notes(wb["Notes"], m)
     write_mapping(wb["Mapping"], fin)
     write_raw(wb["Raw"], fin.sources)

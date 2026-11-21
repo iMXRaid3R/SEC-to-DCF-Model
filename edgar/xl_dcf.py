@@ -17,14 +17,14 @@ DEFAULTS = {"rf": 0.0425, "erp": 0.055, "beta": 1.0, "kd": 0.05, "g": 0.025, "mu
 # Row map. Other modules (Assumptions, tests) refer to DCF cells through R / ref() only.
 _INPUTS = ["wacc", "price", "shares", "bs_date", "debt", "cash",
            "nci", "net_debt", "other_assets", "other_claims", "claims", "g", "multiple", "mid", "fy_end", "val_override", "val_date", "elapsed",
-           "choices", "tv_mode", "roic_n", "roic_t", "sbc_mode", "capex_mode", "lease_mode"]
+           "choices", "tv_mode", "roic_n", "roic_t", "sbc_mode", "capex_mode"]
 _FCF = ["year", "ebit", "taxes", "nopat", "da", "capex", "wc", "sbc_add", "ufcf", "share", "counted", "period",
         "factor", "pv", "ebitda"]
 # Method choices (dropdowns on the DCF tab); the first option of each is what the formulas test for.
 TV_MODES = ("NOPAT less reinvestment", "Final-year FCF")
 SBC_MODES = ("Cash cost", "Add back")
 CAPEX_MODES = ("Model path", "Depreciation + growth")
-LEASE_MODES = ("Exclude", "Treat as debt")
+from .layout import LEASE_MODES     # the lease choice is made on the Bridge tab
 _VAL = ["sum_pv", "tv", "tv_period", "pv_tv", "ev", "less_debt", "less_nci", "plus_other", "less_other", "equity",
         "per_share", "cur_price",
         "upside", "tv_pct", "implied"]
@@ -92,35 +92,21 @@ def write_dcf(ws, m, calc):
             note="Worked out on the WACC tab (click the name): cost of equity, cost of debt and their weights")
     c.font = st.font(st.GREEN, True)
     st.link_to(ws.cell(row=R["wacc"], column=1), xl_wacc.SHEET, f"B{xl_wacc.W['wacc']}")
-    put("price", "Share price", f"=N({last.market('Share price')})", "price")
-    ws.cell(row=R["price"], column=6,
-            value=f"=IF({last.market('Price override')}<>\"\",\"Price override\","
-                  f"IF({B('price')}=0,\"No price available\",\"Live close as of \"&TEXT({last.market('Price date')},\"yyyy-mm-dd\")))"
-            ).font = st.NOTE_FONT
-    put("shares", "Diluted shares", f"=N({last.market('Diluted shares')})", "shares",
-        note="Shares outstanding plus the dilution entered on the Inputs tab")
-    put("bs_date", "Latest balance sheet date", bs_col.end.date(), "date",
-        note=("Latest 10-Q" if bs_col.kind == "ltm" else "Last fiscal year end (no newer 10-Q)")
-             + " - source of debt, cash and NCI below")
-    put("debt", "Total debt", f"={bs.n('Short-Term Borrowings')}+{bs.n('Current Portion of LT Debt')}"
-                              f"+{bs.n('Long-Term Debt')}"
-                              f"+IF({B('lease_mode')}=\"{LEASE_MODES[1]}\",{bs.n('Operating Lease Liabilities')},0)",
-        "usd", note="Includes lease liabilities when the lease choice below says so")
-    put("cash", "Cash & investments", f"={bs.n('Cash & Equivalents')}+{bs.n('Short-Term Investments')}"
-                                      f"+{bs.n('Long-Term Investments')}", "usd")
-    put("nci", "Noncontrolling & redeemable interests",
-        f"={bs.n('Noncontrolling Interest')}+{bs.n('Redeemable NCI & Mezzanine Equity')}", "usd",
-        note="Other owners' claims, deducted from equity value")
-    put("net_debt", "Net debt", f"={B('debt')}-{B('cash')}", "usd")
-    put("other_assets", "Other non-operating assets", None, "usd", "input",
-        note="Optional, in full (e.g. 5000000000): assets the forecast cash flows don't capture and net debt "
-             "doesn't count, such as equity stakes. Added to equity value")
-    put("other_claims", "Other claims on the business", None, "usd", "input",
-        note="Optional, in full: obligations net debt misses, such as pension deficits or preferred stock. "
-             "Deducted from equity value")
-    put("claims", "Net claims ahead of common equity",
-        f"={B('net_debt')}+{B('nci')}+N({B('other_claims')})-N({B('other_assets')})", "usd",
-        note="Net debt + other owners' interests + other claims - other non-operating assets")
+    from . import xl_bridge as br
+    bridge = [("price", "Share price", "price", "price"), ("shares", "Diluted shares", "diluted", "shares"),
+              ("bs_date", "Balance sheet date", "bs_date", "date"), ("debt", "Total debt", "debt", "usd"),
+              ("cash", "Cash & investments", "cash", "usd"), ("nci", "Noncontrolling & redeemable interests", "nci", "usd"),
+              ("net_debt", "Net debt", "net_debt", "usd"), ("other_assets", "Other non-operating assets", "other_assets", "usd"),
+              ("other_claims", "Other claims on the business", "other_claims", "usd"),
+              ("claims", "Net claims ahead of common equity", "claims", "usd")]
+    for key, label, bkey, fmt in bridge:
+        src = br.ref(bkey)
+        c = put(key, label, f'=IF({src}="","",{src})' if key in ("other_assets", "other_claims") else f"={src}", fmt)
+        c.font = st.font(st.GREEN, key in ("shares", "claims"))
+    st.link_to(ws.cell(row=R["claims"], column=1), br.SHEET, f"B{br.K['claims']}")
+    st.hover_note(ws.cell(row=R["claims"], column=6),
+                  "From the Bridge tab (click the name): debt, cash, other owners' interests, other assets and claims, "
+                  "and the diluted share count").font = st.NOTE_FONT
     put("g", "Terminal growth", DEFAULTS["g"], "pct", "input")
     if m.comps:
         put("multiple", "Exit EV/EBITDA multiple", f"=IFERROR(ROUND({m.comps['EV / EBITDA']},1),{DEFAULTS['multiple']:g})",
@@ -142,7 +128,6 @@ def write_dcf(ws, m, calc):
         note="That part of year-1 free cash flow is excluded; later years are discounted from the valuation date")
 
     # ---- method choices
-    ifrs = m.fin.taxonomy == "ifrs-full"
     ws.cell(row=R["choices"], column=1, value="Method choices").font = st.font(bold=True)
     final = Ctx(g, "DCF", g.fcst[-1])
     last_Lc = get_column_letter(2 + n)
@@ -168,9 +153,6 @@ def write_dcf(ws, m, calc):
     choice("capex_mode", "Capex in the free cash flow", CAPEX_MODES, CAPEX_MODES[0],
            f"{CAPEX_MODES[0]}: the forecast on the Cash Flow tab. {CAPEX_MODES[1]}: depreciation plus the revenue "
            "increase x last year's PP&E / revenue")
-    choice("lease_mode", "Lease liabilities", LEASE_MODES, LEASE_MODES[1] if ifrs else LEASE_MODES[0],
-           "IFRS filers: lease payments are outside operating cash flow, so leases count as debt (default for "
-           "them). US GAAP: operating lease cost is already in EBIT, so they don't")
 
     # ---- Unlevered FCF, one column per forecast year (C..)
     dcol = {fc.j: 3 + k for k, fc in enumerate(g.fcst)}

@@ -119,8 +119,9 @@ def write_wacc(ws, m):
     calc("price", "Share price", f"=N({last.market('Share price')})", "price", "Inputs tab")
     calc("shares", "Diluted shares", f"=N({last.market('Diluted shares')})", "shares", "Inputs tab")
     calc("equity", "Equity value (market cap)", f"={B('price')}*{B('shares')}", "usd")
-    calc("debt", "Debt", f"={xl_dcf.ref('debt')}", "usd",
-         "From the DCF tab: latest balance sheet, with leases when the DCF's lease choice says so")
+    from . import xl_bridge as br
+    calc("debt", "Debt", f"={br.ref('debt')}", "usd",
+         "From the Bridge tab: latest balance sheet, with leases when the lease choice there says so")
     calc("w_e", "Equity weight", f'=IFERROR({B("equity")}/({B("equity")}+{B("debt")}),1)', "pct")
     calc("w_d", "Debt weight", f'=IFERROR({B("debt")}/({B("equity")}+{B("debt")}),0)', "pct")
 

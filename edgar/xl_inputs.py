@@ -68,9 +68,16 @@ def write_inputs(ws, m):
               "the year. Off: the whole year is forecast from last year") if g.ytd is not None else
         "No quarterly report newer than the last annual report, so the whole of year 1 is forecast")
     for key, name, w in (("w_bear", "Bear", 0.25), ("w_base", "Base", 0.5), ("w_bull", "Bull", 0.25)):
-        put(key, f"Probability: {name}", w, st.FMT["pct"], "input",
-            note="Used by the portfolio roll-up for a probability-weighted value (the workbook itself shows one "
-                 "scenario at a time)" if key == "w_bear" else "")
+        if m.kind == "fin":                         # the financials template has no Scenarios tab
+            put(key, f"Probability: {name}", w, st.FMT["pct"], "input",
+                note="Used by the portfolio roll-up for a probability-weighted value (the workbook itself shows "
+                     "one scenario at a time)" if key == "w_bear" else "")
+        else:                                       # set on the Scenarios tab, next to the cases
+            r = m.grid.prob_rows[key]
+            src = f"{SHEET_NAMES['SCN']}!$B${r}"
+            c = put(key, f"Probability: {name}", f"={src}", st.FMT["pct"],
+                    note="Set on the Scenarios tab (click the name)" if key == "w_bear" else "")
+            st.link_to(ws.cell(row=R[key], column=1), SHEET_NAMES["SCN"], f"B{r}")
     put("w_total", "Probabilities add up to", f"=SUM({B('w_bear')}:{B('w_bull')})", st.FMT["pct"],
         check=f'=IF(ABS({B("w_total")}-1)>0.0001,"Should be 100%","")')
 
@@ -120,24 +127,29 @@ def write_inputs(ws, m):
     put("52w low", "52-week low ($)", st.stock_range(B("Ticker"), "MIN"), st.FMT["usd_price"])
     put("52w high", "52-week high ($)", st.stock_range(B("Ticker"), "MAX"), st.FMT["usd_price"])
 
-    # ---- Dilution (treasury stock method for options; stock units count in full)
+    # ---- Dilution (treasury stock method for options; stock units count in full). With a Bridge tab the inputs
+    # are typed there and listed here as links.
+    if m.bridge:
+        from . import xl_bridge as br
+        for key, label, bkey, fmt in (("Options", "Stock options outstanding", "options", "shares"),
+                                      ("Option strike", f"Average exercise price ({'$' if not foreign else cur})",
+                                       "strike", "price"),
+                                      ("RSUs", "Unvested stock units (RSUs / PSUs)", "rsus", "shares"),
+                                      ("Diluted shares", "Diluted shares used in the valuation", "diluted", "shares")):
+            src = br.ref(bkey)
+            c = put(key, label, f'=IF({src}="","",{src})', st.FMT[fmt], bold=key == "Diluted shares",
+                    note="Set on the Bridge tab (click the name)" + (": shares outstanding + stock units + options "
+                                                                    "in the money" if key == "Diluted shares" else ""))
+            c.font = st.font(st.GREEN, key == "Diluted shares")
+            st.link_to(ws.cell(row=R[key], column=1), br.SHEET, f"{'D' if bkey != 'diluted' else 'B'}{br.K[bkey]}")
     d = fin.dilution or {}
+    if m.bridge:
+        d = None
     filed = lambda v, f: f"Filed in the latest annual report: {f.format(v)}. " if v else ""
-    put("Options", "Stock options outstanding", d.get("options"), "#,##0", "optional",
-        note=filed(d.get("options"), "{:,.0f}") + "Optional, in full. Left blank = no dilution from options")
-    put("Option strike", f"Average exercise price ({'$' if not foreign else cur})", d.get("strike"), st.FMT["price"],
-        "optional", note=filed(d.get("strike"), "{:,.2f}") + "Options only dilute to the extent the share price is "
-                                                             "above this")
-    put("RSUs", "Unvested stock units (RSUs / PSUs)", d.get("rsus"), "#,##0", "optional",
-        note=filed(d.get("rsus"), "{:,.0f}") + "Optional, in full: counted one for one. Usually the larger item "
-                                               "for tech companies")
-    put("Diluted shares", "Diluted shares used in the valuation",
-        f'=IF(N({B("Shares outstanding")})=0,"",{B("Shares outstanding")}+N({B("RSUs")})'
-        f'+IF(AND(N({B("Options")})>0,N({B("Share price")})>0),'
-        f'MAX(0,N({B("Options")})*(1-N({B("Option strike")})/{B("Share price")})),0))', st.FMT["shares"], bold=True,
-        note="Shares outstanding + stock units + options x (1 - exercise price / share price)")
+    if d is not None:
+        _dilution(put, B, d, filed, foreign, cur)
 
-    # ---- settings collected while the valuation tab was written (defaults, notes and dropdown options)
+    # ---- settings collected while the valuation tabs were written (defaults, notes and dropdown options)
     has_rate = m.kind == "fin" or "dcf" in m.parts
     rate = xl_dcf.ref("wacc") if m.kind != "fin" else f"({B('rf')}+{B('beta')}*{B('erp')})"     # WACC / cost of equity
     rate_name = "WACC" if m.kind != "fin" else "the cost of equity"
@@ -236,7 +248,7 @@ def override_header(ws, r):
         st.header_cell(ws.cell(row=r, column=j), h, "ltm" if h == "Your override" else "fcst")
 
 
-def setting(ws, m, r, key, label, default, fmt, note="", options=None):
+def setting(ws, m, r, key, label, default, fmt, note="", options=None, reg=None):
     """One setting in the override pattern, on the tab it acts on:
         B  used      = the override when there is one, else the default (formulas read this cell)
         C  default   = what the model suggests (a number or a formula); never typed over
@@ -255,7 +267,7 @@ def setting(ws, m, r, key, label, default, fmt, note="", options=None):
     d.font = st.formula_font(default) if isinstance(default, str) and default.startswith("=") else st.font()
     o = ws.cell(row=r, column=4)
     o.number_format = number
-    m.reg.add(ws, o, "DCF", label)
+    m.reg.add(ws, o, *(reg or ("DCF", label)))
     if options:
         dv = DataValidation(type="list", formula1='"' + ",".join(options) + '"', allow_blank=True)
         ws.add_data_validation(dv)
@@ -287,8 +299,10 @@ def _index(ws, m):
         items = [(SHEET, f"B{SCEN_TITLE + 3}", "Bear / Base / Bull drivers",
                   "Return on equity, payout and share count for each scenario")]
     else:
-        items = [("Drivers", f"B{g.scen_first}", "Bear / Base / Bull drivers",
-                  "Year 1, mid-point and final-year growth and margins for each scenario")]
+        items = [(SHEET_NAMES["SCN"], f"B{g.scen_ovr_first}", "Bear / Base / Bull cases",
+                  "Year 1, mid-point and final-year growth and margins for each scenario, and your overrides"),
+                 ("Drivers", f"{g.fcst[0].L}{g.year_ovr_rows['Revenue growth']}", "Per-year driver overrides",
+                  "Fix one driver in one forecast year")]
     if "dcf" in m.parts and m.kind != "fin":
         from .xl_wacc import SHEET as WS, W
         items.append((WS, f"D{W['rf']}", "WACC settings", "Risk-free rate, equity risk premium, beta and its window, "
@@ -314,6 +328,23 @@ def _finish(ws):
     for L, w in zip("ABCD", (44, 26, 46, 110)):
         ws.column_dimensions[L].width = w
     ws.freeze_panes = "B4"
+
+
+def _dilution(put, B, d, filed, foreign, cur):
+    """Dilution typed on Inputs: used when there is no Bridge tab (the financials template, statements only)."""
+    put("Options", "Stock options outstanding", d.get("options"), "#,##0", "optional",
+        note=filed(d.get("options"), "{:,.0f}") + "Optional, in full. Left blank = no dilution from options")
+    put("Option strike", f"Average exercise price ({'$' if not foreign else cur})", d.get("strike"), st.FMT["price"],
+        "optional", note=filed(d.get("strike"), "{:,.2f}") + "Options only dilute to the extent the share price is "
+                                                             "above this")
+    put("RSUs", "Unvested stock units (RSUs / PSUs)", d.get("rsus"), "#,##0", "optional",
+        note=filed(d.get("rsus"), "{:,.0f}") + "Optional, in full: counted one for one. Usually the larger item "
+                                               "for tech companies")
+    put("Diluted shares", "Diluted shares used in the valuation",
+        f'=IF(N({B("Shares outstanding")})=0,"",{B("Shares outstanding")}+N({B("RSUs")})'
+        f'+IF(AND(N({B("Options")})>0,N({B("Share price")})>0),'
+        f'MAX(0,N({B("Options")})*(1-N({B("Option strike")})/{B("Share price")})),0))', st.FMT["shares"], bold=True,
+        note="Shares outstanding + stock units + options x (1 - exercise price / share price)")
 
 
 def warnings_count(sheet=None):

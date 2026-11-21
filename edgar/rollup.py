@@ -119,7 +119,7 @@ def to_row(ticker, by_scenario, selected, run, weights=None):
     if row["currency"] != "USD":
         notes.append(f"reports in {row['currency']}; values converted to $ per US-listed share")
     if isinstance(row["checks"], str) and "OK" not in row["checks"]:
-        notes.append("model checks flag a difference: see the Checks & Metrics tab")
+        notes.append("model checks flag a difference: see the Checks tab")
     row["note"] = "; ".join(notes)
     return row
 

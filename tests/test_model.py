@@ -82,9 +82,9 @@ def test_shares_outstanding_found(fins):
 # ---- workbook structure ---------------------------------------------------
 def test_workbook_sheets_and_columns(fins):
     wb, m = build_workbook(fins["ISRG"], 5)
-    assert wb.sheetnames == ["Summary", "Inputs", "Drivers", "Revenue Build", "Income Statement", "Balance Sheet",
-                             "Cash Flow", "WACC", "DCF", "Multiples", "Checks & Metrics", "Notes", "Mapping", "Raw", "Calc",
-                             "_inputs"]
+    assert wb.sheetnames == ["Summary", "Inputs", "Scenarios", "Drivers", "Revenue Build", "Income Statement",
+                             "Balance Sheet", "Cash Flow", "Ratios", "WACC", "Bridge", "DCF", "Multiples", "Checks",
+                             "Notes", "Mapping", "Raw", "Calc", "_inputs"]
     assert [ws.title for ws in wb if ws.sheet_state == "hidden"] == ["Calc", "_inputs"]
     ws = wb["Income Statement"]
     headers = [ws.cell(row=4, column=j).value for j in range(2, 14)]
@@ -137,7 +137,7 @@ def test_inputs_carry_over_to_a_rebuild_with_a_different_layout(fins, tmp_path):
     g = m.grid
     growth = g.rows["Revenue growth"][1]
     inp[f"B{I['Scenario']}"] = "Bull"
-    drv.cell(row=g.scen_ovr_rows["Gross margin"], column=8).value = 0.70    # Bull, year 1 override
+    wb["Scenarios"].cell(row=g.scen_ovr_rows["Gross margin"], column=8).value = 0.70   # Bull, year 1 override
     yr = g.year_ovr_rows["Revenue growth"]
     drv.cell(row=yr, column=g.fcst[1].j).value = 0.25                       # FY2027E override
     drv.cell(row=yr, column=g.fcst[0].j).value = 0.11                       # FY2026E override
@@ -145,7 +145,8 @@ def test_inputs_carry_over_to_a_rebuild_with_a_different_layout(fins, tmp_path):
     rb["A5"] = "Instruments & accessories"
     from edgar.xl_wacc import W
     wb["WACC"][f"D{W['beta']}"] = 1.3
-    inp[f"B{I['RSUs']}"] = 4_000_000
+    from edgar.xl_bridge import K
+    wb["Bridge"][f"D{K['rsus']}"] = 4_000_000                               # stock units, on the Bridge tab
     wb["Notes"]["A5"] = "Procedure growth is the thesis."
     wb.save(path)
 
@@ -153,13 +154,13 @@ def test_inputs_carry_over_to_a_rebuild_with_a_different_layout(fins, tmp_path):
     kept, dropped, _ = carry_over(path, wb2, m2.reg)
     g2 = m2.grid
     assert wb2["Inputs"][f"B{I['Scenario']}"].value == "Bull"
-    assert wb2["Drivers"].cell(row=g2.scen_ovr_rows["Gross margin"], column=8).value == 0.70
+    assert wb2["Scenarios"].cell(row=g2.scen_ovr_rows["Gross margin"], column=8).value == 0.70
     assert wb2["Drivers"].cell(row=g2.year_ovr_rows["Revenue growth"], column=g2.fcst[1].j).value == 0.25
     live = wb2["Drivers"].cell(row=g2.rows["Revenue growth"][1], column=g2.fcst[1].j).value
     assert live.startswith(f'=IF({g2.fcst[1].L}${g2.year_ovr_rows["Revenue growth"]}=""')   # the formula is kept
     assert wb2["Revenue Build"].cell(row=5, column=g2.last_fy.j).value == 6000
     assert wb2["Revenue Build"]["A5"].value == "Instruments & accessories"
-    assert wb2["WACC"][f"D{W['beta']}"].value == 1.3 and wb2["Inputs"][f"B{I['RSUs']}"].value == 4_000_000
+    assert wb2["WACC"][f"D{W['beta']}"].value == 1.3 and wb2["Bridge"][f"D{K['rsus']}"].value == 4_000_000
     assert f"$B${W['adj']}" in wb2["WACC"][f"C{W['beta']}"].value                 # default: the adjusted beta
     assert wb2["Notes"]["A5"].value == "Procedure growth is the thesis."
     assert len(kept) == 9 and dropped == []
@@ -275,7 +276,8 @@ def test_dcf_has_method_choices_and_ten_year_default(fins):
     wb, m = build_workbook(fins["ISRG"])
     assert len(m.grid.fcst) == 10 and m.grid.fcst[-1].header == "FY2035E"
     d, inp = wb["DCF"], wb["Inputs"]
-    assert [d[f"C{R[k]}"].value for k in ("tv_mode", "sbc_mode", "capex_mode", "lease_mode")] == \
+    from edgar.xl_bridge import K
+    assert [d[f"C{R[k]}"].value for k in ("tv_mode", "sbc_mode", "capex_mode")] + [wb["Bridge"][f"C{K['lease_mode']}"].value] == \
         [TV_MODES[0], SBC_MODES[0], CAPEX_MODES[0], LEASE_MODES[0]]
     assert [inp[f"B{I[k]}"].value for k in ("tv_mode", "g")] == [f'=IF(DCF!$B${R[k]}="","",DCF!$B${R[k]})'
                                                                 for k in ("tv_mode", "g")]
@@ -459,8 +461,8 @@ def test_parts_choose_the_tabs_and_are_remembered(fins, tmp_path):
     assert P.resolve({"dcf"}, [], remembered=set()) == {"dcf"} and P.resolve(None, [], default=set()) == set()
 
     wb, m = build_workbook(fins["ISRG"], 5, parts=set())
-    assert wb.sheetnames == ["Summary", "Inputs", "Drivers", "Income Statement", "Balance Sheet", "Cash Flow",
-                             "Checks & Metrics", "Notes", "Mapping", "Raw", "_inputs"]
+    assert wb.sheetnames == ["Summary", "Inputs", "Scenarios", "Drivers", "Income Statement", "Balance Sheet",
+                             "Cash Flow", "Ratios", "Checks", "Notes", "Mapping", "Raw", "_inputs"]
     rev = wb["Income Statement"].cell(row=m.grid.rows["Revenue"][1], column=m.grid.fcst[1].j).value
     assert "Revenue Build" not in rev                                    # no link to a tab that isn't there
     for ws in wb.worksheets:                                             # nothing points at a missing tab
@@ -521,12 +523,12 @@ def test_multiples_tab_formulas(fins):
     # today's multiple on the forecast (column B of the figures) and on reported results (column E)
     assert f"/B{r['eps']}" in ws[f"{C['now']}{t}"].value and f"/E{r['eps']}" in ws[f"{C['now_ltm']}{t}"].value
     assert "forecast" in ws[f"{C['now']}{xm.MET_HDR}"].value and "reported" in ws[f"{C['now_ltm']}{xm.MET_HDR}"].value
-    assert ws[f"B{r['claims']}"].value == "=DCF!$B$" + str(__import__("edgar.xl_dcf").xl_dcf.R["claims"])
+    from edgar.xl_bridge import K
+    assert ws[f"B{r['claims']}"].value == f"=Bridge!$B${K['claims']}"   # one bridge, read by every method
     assert ws[f"{C['default']}{t}"].value == xm.DEFAULTS["pe"] and ws[f"{C['use']}{r['ev_sales']}"].value == "Off"
     assert ws[f"{C['peer']}{t}"].value is None                          # no peers, no peer column value
     wb, _ = build_workbook(fins["ISRG"], 10, parts={"multiples"})        # without the DCF: its own bridge
-    own = wb["Multiples"][f"B{r['claims']}"].value
-    assert "DCF" not in own and "Long-Term Debt" not in own and "Balance Sheet" in own
+    assert wb["Multiples"][f"B{r['claims']}"].value == f"=Bridge!$B${K['claims']}" and "Bridge" in wb.sheetnames
     wb, m = build_workbook(fins["ISRG"], 10, [_metrics(fins[x]) for x in ("KO", "COST")])
     ws = wb["Multiples"]
     assert "Comps!" in ws[f"{C['peer']}{t}"].value and "Comps!" in ws[f"{C['default']}{t}"].value
@@ -619,8 +621,9 @@ def test_settings_are_typed_where_they_act_and_listed_on_inputs(fins):
     wb, m = build_workbook(fins["ISRG"], 5)
     dcf, inp = wb["DCF"], wb["Inputs"]
     from edgar.xl_wacc import W
+    from edgar.xl_bridge import K
     for key, sheet, rows in (("rf", "WACC", W), ("beta", "WACC", W), ("g", "DCF", R), ("multiple", "DCF", R),
-                             ("tv_mode", "DCF", R), ("other_claims", "DCF", R)):
+                             ("tv_mode", "DCF", R), ("other_claims", "Bridge", K), ("lease_mode", "Bridge", K)):
         ws, r = wb[sheet], rows[key]
         assert m.reg.items[f"DCF|{m.settings[key]['label']}"][:2] == (sheet, f"D{r}")       # the override cell
         assert ws[f"D{r}"].fill.fgColor.rgb.endswith("FFF2CC") and ws[f"D{r}"].value is None
@@ -632,7 +635,8 @@ def test_settings_are_typed_where_they_act_and_listed_on_inputs(fins):
     # the index of inputs on other tabs, and click-throughs from the Summary's methods
     links = {inp.cell(row=r, column=1).value: inp.cell(row=r, column=1).hyperlink.location
              for r in range(max(I.values()) + 3, max(I.values()) + 12) if inp.cell(row=r, column=1).hyperlink}
-    assert set(links) >= {"Bear / Base / Bull drivers", "DCF settings", "Target multiples", "Price target weights"}
+    assert set(links) >= {"Bear / Base / Bull cases", "WACC settings", "DCF settings", "Target multiples",
+                          "Price target weights"}
     s = wb["Summary"]
     exit_row = next(r for r in range(1, 40) if s.cell(row=r, column=1).value == "DCF: exit multiple")
     assert s.cell(row=exit_row, column=1).hyperlink.location == f"'DCF'!D{R['multiple']}"   # its override
@@ -712,7 +716,7 @@ def test_brand_colour_is_made_readable_and_applied(fins):
         wb, m = build_workbook(fin, 5)
     finally:
         fin.brand = None
-    for name in ("Summary", "Inputs", "Drivers", "Income Statement", "DCF", "Checks & Metrics"):
+    for name in ("Summary", "Inputs", "Drivers", "Income Statement", "DCF", "Checks"):
         ws = wb[name]
         assert ws["A1"].fill.fgColor.rgb.endswith(st.THEME["accent"]) and not ws.sheet_view.showGridLines, name
     # meaning colours don't change with the brand: inputs stay yellow
@@ -728,6 +732,40 @@ def test_statements_have_margin_lines_and_checks_show_status(fins):
     r = g.rows["Gross margin (%)"][1]
     assert r == g.rows["Gross Profit"][1] + 1 and "Gross Profit" not in str(ws.cell(row=r, column=1).font.color)
     assert ws.cell(row=r, column=g.fcst[0].j).value.startswith("=IF(")
-    chk = wb["Checks & Metrics"]
+    chk = wb["Checks"]
     status = chk.cell(row=g.rows["Check: Assets - Liabilities & Equity"][1], column=g.cols[-1].j + 1).value
     assert "✓" in status and "✗" in status
+
+
+# ---- Bridge, Scenarios, Ratios tabs ------------------------------------------
+def test_bridge_scenarios_and_ratios_tabs(fins, tmp_path):
+    from edgar.inputs import carry_over
+    from edgar.layout import INPUT_ROWS as I
+    from edgar.xl_bridge import K
+    from edgar.xl_dcf import R
+    wb, m = build_workbook(fins["ISRG"], 5)
+    g = m.grid
+    # Bridge: the one place for claims and the share count; the DCF and Inputs link to it
+    assert wb["DCF"][f"B{R['claims']}"].value == f"=Bridge!$B${K['claims']}"
+    assert wb["DCF"][f"B{R['shares']}"].value == f"=Bridge!$B${K['diluted']}"
+    assert f"Bridge!$B${K['diluted']}" in wb["Inputs"][f"B{I['Diluted shares']}"].value
+    assert f"Bridge!$B${K['debt']}" in wb["WACC"][f"B{__import__('edgar.xl_wacc').xl_wacc.W['debt']}"].value
+    # Scenarios: probabilities and the case tables; the Drivers' forecast reads the selected case from there
+    sc = wb["Scenarios"]
+    assert sc[f"B{g.prob_rows['w_base']}"].value == 0.5
+    assert f"Scenarios!$B${g.prob_rows['w_base']}" in wb["Inputs"][f"B{I['w_base']}"].value
+    live = wb["Drivers"].cell(row=g.rows["Gross margin"][1], column=g.fcst[0].j).value
+    assert f"Scenarios!$K${g.scen_rows['Gross margin']}" in live
+    # Ratios: grouped, history and forecast
+    ra = wb["Ratios"]
+    labels = {ra.cell(row=r, column=1).value: r for r in range(1, 60)}
+    assert {"Growth", "Returns", "Per share", "Return on equity (ROE)", "Interest cover (EBIT / interest)"} <= set(labels)
+    assert ra.cell(row=labels["FCF per share"], column=g.fcst[0].j).value.startswith("=IF(")
+    assert [wb["Checks"].cell(row=r, column=1).value for r in range(5, 9)][0].startswith("Check:")
+    # dilution typed on Inputs in an older workbook moves to the Bridge tab's override cell
+    old = build_workbook(fins["ISRG"], 5, parts=set())[0]                 # statements only: dilution on Inputs
+    old["Inputs"][f"B{I['RSUs']}"] = 3_000_000
+    old.save(tmp_path / "old.xlsx")
+    wb2, m2 = build_workbook(fins["ISRG"], 5)
+    carry_over(tmp_path / "old.xlsx", wb2, m2.reg)
+    assert wb2["Bridge"][f"D{K['rsus']}"].value == 3_000_000

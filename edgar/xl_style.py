@@ -124,7 +124,8 @@ def hover_note(cell, text, keep=110):
         cell.value = text
         return cell
     first = re.split(r"(?<=[.:;])\s", text, maxsplit=1)[0]
-    cell.value = (first if len(first) <= keep else text[:keep].rsplit(" ", 1)[0]) + "  (hover for more)"
+    cell.value = ("How it works  (hover)" if keep == 0 else
+                  (first if len(first) <= keep else text[:keep].rsplit(" ", 1)[0]) + "  (hover for more)")
     cell.comment = Comment(text, "Model")
     cell.comment.width, cell.comment.height = 360, max(80, 18 * (len(text) // 55 + 1))
     return cell

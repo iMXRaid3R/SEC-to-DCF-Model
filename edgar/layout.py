@@ -22,8 +22,8 @@ import pandas as pd
 from openpyxl.utils import get_column_letter
 
 SHEET_NAMES = {"A": "Drivers", "IS": "Income Statement", "BS": "Balance Sheet", "CF": "Cash Flow",
-               "DCF": "DCF", "CHK": "Checks & Metrics", "SUM": "Summary", "INP": "Inputs",
-               "MUL": "Multiples"}
+               "DCF": "DCF", "CHK": "Checks", "SUM": "Summary", "INP": "Inputs",
+               "MUL": "Multiples", "BRG": "Bridge", "RAT": "Ratios", "SCN": "Scenarios"}
 FIRST_ROW = 5
 
 # Revenue Build sheet (optional segment build; rows are fixed, columns follow the shared grid)
@@ -79,6 +79,7 @@ def input_ref(key, sheet=None):
 
 
 USE_YTD = f'{input_ref("Use YTD")}="On"'
+LEASE_MODES = ("Exclude", "Treat as debt")    # whether lease liabilities count as debt (chosen on the Bridge tab)
 
 # Driver groups, shown as headings on the Drivers tab.
 DRIVER_GROUPS = {
@@ -443,22 +444,75 @@ CHECK_ROWS = [
     Calc("Check: BS cash - CF ending cash (forecast)",
          fcst=lambda c: f"={c.v('Cash & Equivalents')}-{c.v('Ending Cash')}"),
 ]
-METRIC_ROWS = [
-    Calc("Operating margin", fmt="pct", **_both(_ratio("Operating Income", "Revenue"))),
-    Calc("EBITDA margin", fmt="pct", **_both(_ratio("EBITDA", "Revenue"))),
-    Calc("Net margin", fmt="pct", **_both(_ratio("Net Income", "Revenue"))),
-    Calc("Free cash flow", note="CFO - Capex", **_both(
-        lambda c: f'=IF({_blank(c.v("Cash from Operations"))},"",{c.v("Cash from Operations")}-{c.n("Capex")})')),
-    Calc("FCF margin", fmt="pct", **_both(_ratio("Free cash flow", "Revenue"))),
-    Calc("FCF conversion", fmt="x", note="FCF / Net Income", **_both(_ratio("Free cash flow", "Net Income"))),
-    Calc("Net debt", note="Total debt - cash - ST and LT investments", **_both(
-        lambda c: f"={c.n('Short-Term Borrowings')}+{c.n('Current Portion of LT Debt')}+{c.n('Long-Term Debt')}"
-                  f"-{c.n('Cash & Equivalents')}-{c.n('Short-Term Investments')}-{c.n('Long-Term Investments')}")),
-    Calc("Net debt / EBITDA", fmt="x", **_both(_ratio("Net debt", "EBITDA"))),
-]
+def _growth_of(label):
+    """Year-on-year growth of a line; blank when last year's figure isn't positive (growth from a loss means
+    nothing)."""
+    return _prev_needed(lambda c: f'=IF(OR({_blank(c.v(label), c.p(label))},N({c.p(label)})<=0),"",'
+                                  f'IFERROR({c.v(label)}/{c.p(label)}-1,""))')
+
+
+def _avg_return(num, den):
+    """num / average of this and last year's den (this year's alone when there is no prior column)."""
+    def f(c):
+        if c.prev is None:
+            return _ratio(num, den)(c)
+        return (f'=IF({_blank(c.v(num), c.v(den))},"",IFERROR({c.v(num)}/AVERAGE({c.v(den)},'
+                f'IF({c.p(den)}="",{c.v(den)},{c.p(den)})),""))')
+    return f
+
+
+_DEBT = lambda c: f"({c.n('Short-Term Borrowings')}+{c.n('Current Portion of LT Debt')}+{c.n('Long-Term Debt')})"
+_CASH = lambda c: f"({c.n('Cash & Equivalents')}+{c.n('Short-Term Investments')}+{c.n('Long-Term Investments')})"
+_per_share = lambda num: lambda c: (f'=IF({_blank(c.v(num), c.v("Diluted Shares"))},"",'
+                                    f'IFERROR({c.v(num)}/{c.v("Diluted Shares")},""))')
+
+# Ratios tab, in groups. History and forecast alike.
+RATIO_GROUPS = {
+    "Growth": [
+        Calc("EBITDA growth", fmt="pct", **_both(_growth_of("EBITDA"))),
+        Calc("Net income growth", fmt="pct", **_both(_growth_of("Net Income"))),
+        Calc("EPS growth", fmt="pct", **_both(_growth_of("Diluted EPS"))),
+        Calc("FCF growth", fmt="pct", **_both(_growth_of("Free cash flow")))],
+    "Margins": [
+        Calc("Operating margin", fmt="pct", **_both(_ratio("Operating Income", "Revenue"))),
+        Calc("EBITDA margin", fmt="pct", **_both(_ratio("EBITDA", "Revenue"))),
+        Calc("Net margin", fmt="pct", **_both(_ratio("Net Income", "Revenue"))),
+        Calc("FCF margin", fmt="pct", **_both(_ratio("Free cash flow", "Revenue")))],
+    "Returns": [
+        Calc("Return on equity (ROE)", fmt="pct", note="Net income / average shareholders' equity",
+             **_both(_avg_return("Net Income", "Shareholders' Equity (Parent)"))),
+        Calc("Return on invested capital (ROIC)", fmt="pct",
+             note="Operating income after tax / (equity + debt - cash and investments) at the year end",
+             **_both(lambda c: f'=IFERROR(IF(({c.n("Total Equity")}+{_DEBT(c)}-{_CASH(c)})<=0,"",'
+                               f'{c.n("Operating Income")}*(1-MIN(0.5,MAX(0,N({c.v("Tax rate")}))))/'
+                               f'({c.n("Total Equity")}+{_DEBT(c)}-{_CASH(c)})),"")')),
+        Calc("Return on assets (ROA)", fmt="pct", note="Net income / average total assets",
+             **_both(_avg_return("Net Income", "Total Assets")))],
+    "Cash flow": [
+        Calc("Free cash flow", note="CFO - Capex", **_both(
+            lambda c: f'=IF({_blank(c.v("Cash from Operations"))},"",{c.v("Cash from Operations")}-{c.n("Capex")})')),
+        Calc("FCF conversion", fmt="x", note="FCF / Net Income", **_both(_ratio("Free cash flow", "Net Income"))),
+        Calc("Cash conversion (CFO / net income)", fmt="x", **_both(_ratio("Cash from Operations", "Net Income"))),
+        Calc("Capex / D&A", fmt="x", note="Above 1x: investing for growth; near 1x: maintaining",
+             **_both(_ratio("Capex", "D&A")))],
+    "Balance sheet and leverage": [
+        Calc("Net debt", note="Total debt - cash - ST and LT investments", **_both(
+            lambda c: f"={_DEBT(c)}-{_CASH(c)}")),
+        Calc("Net debt / EBITDA", fmt="x", **_both(_ratio("Net debt", "EBITDA"))),
+        Calc("Interest cover (EBIT / interest)", fmt="x", note="Blank when there is no interest expense",
+             **_both(lambda c: f'=IFERROR(IF(N({c.v("Interest Expense")})<=0,"",{c.v("Operating Income")}/'
+                               f'{c.v("Interest Expense")}),"")')),
+        Calc("Debt / equity", fmt="x", **_both(lambda c: f'=IFERROR(IF(N({c.v("Total Equity")})<=0,"",'
+                                                       f'{_DEBT(c)}/{c.v("Total Equity")}),"")'))],
+    "Per share": [
+        Calc("FCF per share", fmt="eps", **_both(_per_share("Free cash flow"))),
+        Calc("Book value per share", fmt="eps", **_both(_per_share("Shareholders' Equity (Parent)"))),
+        Calc("Dividends per share", fmt="eps", **_both(_per_share("Dividends Paid")))],
+}
+METRIC_ROWS = [r for rows in RATIO_GROUPS.values() for r in rows]
 
 # Memo lines on the income statement: growth and margins right under the lines they describe, so the
-# statement reads on its own (the same ratios are on Checks & Metrics).
+# statement reads on its own (more ratios are on the Ratios tab).
 _growth = _prev_needed(lambda c: f'=IF({_blank(c.v("Revenue"), c.p("Revenue"))},"",IFERROR({c.v("Revenue")}/{c.p("Revenue")}-1,""))')
 for _after, _row in (("Revenue", Calc("Revenue growth (y/y)", fmt="pct", memo=True, indent=1, plug=_growth, fcst=_growth)),
                      ("Gross Profit", Calc("Gross margin (%)", fmt="pct", memo=True, indent=1,
@@ -525,21 +579,27 @@ class Grid:
         assert all(d.label in self.rows for d in DRIVER_ROWS), "every driver needs a group in DRIVER_GROUPS"
         self.driver_last = r - 2
         # Assumptions tab, below the live driver rows: scenario inputs, selected-scenario results, market data
-        self.scen_title = self.driver_last + 2
+        # Scenarios tab: the probabilities, then the Bear / Base / Bull table and your overrides of it
+        self.prob_rows = {"w_bear": 5, "w_base": 6, "w_bull": 7, "w_total": 8}
+        self.scen_title = 11
         self.scen_first = self.scen_title + 3                    # after the title and two header rows
         self.scen_rows = {r.label: self.scen_first + i for i, r in enumerate(DRIVER_ROWS)}
         # your overrides of that table: same shape, directly below it
         self.scen_ovr_title = self.scen_first + len(DRIVER_ROWS) + 1
         self.scen_ovr_first = self.scen_ovr_title + 3
         self.scen_ovr_rows = {r.label: self.scen_ovr_first + i for i, r in enumerate(DRIVER_ROWS)}
-        self.val_title = self.scen_ovr_first + len(DRIVER_ROWS) + 1
+        # Drivers tab, under the driver rows: the results strip, then your per-year overrides
+        self.val_title = self.driver_last + 2
         # per-year overrides of the driver rows at the top: same columns, below the results
         self.year_ovr_title = self.val_title + 4
         self.year_ovr_rows = {r.label: self.year_ovr_title + 2 + i for i, r in enumerate(DRIVER_ROWS)}
         self.ltm = next((c for c in self.cols if c.kind == "ltm"), None)
         self.ytd = next((c for c in self.cols if c.kind == "ytd"), None)
-        self.metric_header = FIRST_ROW + len(CHECK_ROWS) + 1
-        self._place("CHK", [r.label for r in METRIC_ROWS], self.metric_header + 1)
+        self.ratio_headings, r = {}, FIRST_ROW                  # Ratios tab: groups under heading rows
+        for title, rows in RATIO_GROUPS.items():
+            self.ratio_headings[title] = r
+            self._place("RAT", [x.label for x in rows], r + 1)
+            r += len(rows) + 2
 
     def _place(self, key, labels, start):
         for i, label in enumerate(labels):

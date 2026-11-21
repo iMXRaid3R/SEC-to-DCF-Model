@@ -83,18 +83,10 @@ def write_multiples(ws, m):
         f"Next twelve months = {g.fcst[0].header} x (1 - this) + {g.fcst[1].header} x this")
     put("price", "Share price" + ("" if fin.currency == "USD" else f" ({fin.currency} per ordinary share)"),
         f"=N({last.market('Share price')})", "price", "Inputs tab")
-    put("shares", "Diluted shares", f"=N({last.market('Diluted shares')})", "shares", "Inputs tab")
-    if has_dcf:
-        put("claims", "Net claims ahead of common equity", f"={xl_dcf.ref('claims')}", "usd",
-            "From the DCF tab: net debt + other owners' interests + other claims - other assets")
-    else:
-        bs_col = g.ltm if g.ltm is not None and m.has_data("Total Assets", g.ltm) else g.last_fy
-        bs = Ctx(g, "MUL", bs_col)
-        put("claims", "Net claims ahead of common equity",
-            f"={bs.n('Short-Term Borrowings')}+{bs.n('Current Portion of LT Debt')}+{bs.n('Long-Term Debt')}"
-            f"-{bs.n('Cash & Equivalents')}-{bs.n('Short-Term Investments')}-{bs.n('Long-Term Investments')}"
-            f"+{bs.n('Noncontrolling Interest')}+{bs.n('Redeemable NCI & Mezzanine Equity')}", "usd",
-            f"Debt - cash and investments + noncontrolling interests, {bs_col.end.date()} balance sheet")
+    from . import xl_bridge as br
+    put("shares", "Diluted shares", f"={br.ref('diluted')}", "shares", "Bridge tab")
+    put("claims", "Net claims ahead of common equity", f"={br.ref('claims')}", "usd",
+        "Bridge tab: net debt + other owners' interests + other claims - other assets")
     span = min(5, len(g.fcst) - 1)
     put("peg_years", "EPS growth window for PEG (years)", span, "num",
         f"EPS growth = yearly growth from {g.fcst[0].header} over this many years (1 to {len(g.fcst) - 1})",
