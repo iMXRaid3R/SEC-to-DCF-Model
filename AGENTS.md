@@ -32,6 +32,37 @@ is the record of what a build was fed, so keep its columns and the `[fiscal year
 `[10-Q]` tag suffixes stable). `rollup.value_changes` reports value-per-share moves from `valuation_log.csv`.
 `.github/workflows/tests.yml` runs `tests/test_model.py` on every push: keep those tests offline.
 
+Optional parts (`parts.py`: dcf, multiples, comps, revenue_build) are chosen in `build_workbook(parts=...)`;
+the statements must never reference a tab that may be missing (use `input_ref` for settings, `Grid.rev_build`
+for the Revenue Build link). The parts a workbook was built with are stored as the `_build_parts` row of
+`_inputs`; inputs of a switched-off part are "(parked)" rows there (`inputs.PART_TABS`). `menu.py` only builds
+argument lists for `main(argv)`.
+
+The WACC tab (`xl_wacc.py`, built with the DCF part) holds the discount-rate settings and the beta measurement;
+the DCF's `wacc` row links to it. Cost of equity and the risk-free rate are `xl_wacc.ref("ke")` / `ref("rf")`.
+
+Settings are typed on the tab they act on. `xl_dcf.put(kind="input")` writes the DCF settings on the DCF tab and
+records `m.settings[key]["home"]`; `write_inputs` then shows those rows as links back (and keeps their range
+checks, which the DCF shows in column C). `input_ref(key)` still works everywhere because the Inputs row links
+to the real cell. Settings without a home (the financials template, terminal growth when there's no DCF) are
+typed on Inputs. `xl_summary.write_banners` puts a results line on row 1 of each input tab after the Summary
+is written.
+
+Override pattern: a registered (yellow) cell is never a formula (`test_no_input_cell_holds_a_formula`). A
+suggested value goes in a default cell and the formulas read a "used" cell = override if not blank, else the
+default (`xl_inputs.setting` for one-cell settings; parallel override tables on Drivers and Revenue Build).
+Override cells keep the registry keys the old typed-over cells had, so earlier edits carry into them.
+
+House style lives in `xl_style`: `set_theme(fin.brand)` (called by `build_workbook`) sets `THEME` (accent, dark,
+mid, light, pale) and the header fills; `title_bar`, `section`, `row_rules` and `hover_note` do the rest, and
+`build_workbook` runs `title_bar` over every tab at the end. Read colours from `st.THEME` at call time, never
+copy them into module constants. Brand colours only ever touch the frame: inputs (yellow), SEC data (blue),
+up/down (green/red), the target (gold) and numbers (ink) stay fixed.
+
+`Registry.add` gives every registered cell the input look (`xl_style.mark_input`: blue on yellow), so register
+any new input and it is highlighted and carried over. Only registered cells are yellow. The Summary weights are
+`xl_summary.WEIGHTS`; the price target rows are found by their labels (`TARGET`, `TARGET_12M`) in the roll-up.
+
 ## Rules that will bite you
 
 - **Row and setting labels are identifiers.** Formulas, the input registry, the roll-up parser and the tests

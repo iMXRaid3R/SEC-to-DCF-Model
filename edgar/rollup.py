@@ -22,9 +22,13 @@ LOG = "valuation_log.csv"
 BOOK = "Portfolio.xlsx"
 METHODS = {"perp": "DCF: perpetuity growth", "exit": "DCF: exit multiple", "peers": "Peer multiples"}
 FIN_METHODS = {"perp": "Equity model: residual income", "exit": "Equity model: exit P/B"}   # same two slots
+TARGETS = {"target": "Price target (weighted)", "target_12m": "12-month price target"}
+MULT_METHODS = {"fwd_pe": "Forward P/E", "peg": "PEG", "ev_ebitda_fwd": "Forward EV/EBITDA",
+                "ev_sales_fwd": "Forward EV/Sales", "p_fcf": "Price / free cash flow"}
 FIELDS = ["run", "ticker", "company", "currency", "price", "perp", "exit", "peers", "midpoint", "upside",
           "weighted", "upside_weighted", "w_bear", "w_base", "w_bull", "bear", "bull", "bear_perp", "bull_perp", "bear_exit", "bull_exit", "growth_model", "growth_needed_perp",
-          "growth_needed_exit", "wacc", "terminal_growth", "scenario", "checks", "note"]
+          "growth_needed_exit", "wacc", "terminal_growth", "scenario", "checks", "note"] + list(MULT_METHODS) + [
+          "mult_avg", "target", "target_12m", "upside_target", "target_weighted", "bear_target", "bull_target"]
 
 
 def _num(v):
@@ -37,20 +41,27 @@ def _num(v):
 def parse_summary(get):
     """Read one Summary tab. `get(row, col)` returns a cell value (1-based). Per-share values come back in
     dollars per US-listed share, so foreign filers are comparable with the price."""
-    rows = {get(r, 1): r for r in range(1, 70) if isinstance(get(r, 1), str)}
-    side = {get(r, 4): r for r in range(4, 11) if isinstance(get(r, 4), str)}
+    rows = {}
+    for r in range(1, 90):                                       # first occurrence of each label in column A
+        v = get(r, 1)
+        if isinstance(v, str) and v not in rows:
+            rows[v] = r
+    side = {get(r, 4): r for r in range(4, 20) if isinstance(get(r, 4), str)}   # the valuation-inputs panel
     rate = side.get("WACC", side.get("Cost of equity"))          # financials are valued at the cost of equity
+    at = lambda r, c: get(r, c) if r else None
+    beside = lambda r: next((v for v in (get(r, 5), get(r, 6)) if v is not None), None) if r else None
     out = {"company": (get(1, 1) or "").rsplit(" - Summary", 1)[0],
-           "price": _num(get(rows["Share price (US listing)"], 2)), "scenario": get(rows["Scenario"], 2),
-           "wacc": _num(get(rate, 5)) if rate else None, "terminal_growth": _num(get(side["Terminal growth"], 5)),
-           "checks": get(side["Model checks"], 5)}
-    head = rows["Method"]
-    usd_col = 6 if get(head, 6) == "$ per US-listed share" else 3
-    out["currency"] = "USD" if usd_col == 3 else next(
+           "price": _num(at(rows.get("Share price (US listing)"), 2)), "scenario": at(rows.get("Scenario"), 2),
+           "wacc": _num(beside(rate)), "terminal_growth": _num(beside(side.get("Terminal growth"))),
+           "checks": beside(side.get("Model checks"))}
+    head = rows.get("Method")                    # no method table in a statements-only workbook
+    usd_col = 6 if head and get(head, 6) == "$ per US-listed share" else 3
+    foreign = bool(head) and usd_col == 6 or any(k.startswith("Share price (") and "per ordinary" in k for k in rows)
+    out["currency"] = "USD" if not foreign else next(
         (k.split("(")[1].split(" ")[0] for k in rows if k.startswith("Share price (") and "per ordinary" in k), "?")
-    for key, label in METHODS.items():
+    for key, label in list(METHODS.items()) + list(MULT_METHODS.items()) + list(TARGETS.items()):
         label = label if label in rows else FIN_METHODS.get(key)
-        out[key] = _num(get(rows[label], usd_col)) if label in rows else None
+        out[key] = _num(get(rows[label], usd_col)) if head and label in rows and rows[label] > head else None
     out["financial"] = FIN_METHODS["perp"] in rows
     for key, label in (("growth_model", "Revenue growth per year in the model"),
                        ("growth_needed", "Revenue growth per year the price needs")):
@@ -69,28 +80,40 @@ def to_row(ticker, by_scenario, selected, run, weights=None):
     `weights` the (Bear, Base, Bull) probabilities from its Inputs tab."""
     base = by_scenario.get("Base") or by_scenario[selected]
     row = {k: base.get(k) for k in ("company", "currency", "price", "perp", "exit", "peers", "wacc",
-                                    "terminal_growth", "checks")}
-    row.update(run=run, ticker=ticker, scenario=selected, midpoint=_mid(base["perp"], base["exit"]),
-               growth_model=base["growth_model"][0], growth_needed_perp=base["growth_needed"][0],
-               growth_needed_exit=base["growth_needed"][1])
+                                    "terminal_growth", "checks") + tuple(MULT_METHODS)}
+    row.update({k: base.get(k) for k in TARGETS})
+    row["bear_target"] = by_scenario.get("Bear", {}).get("target")
+    row["bull_target"] = by_scenario.get("Bull", {}).get("target")
+    mults = [v for v in (base.get(k) for k in MULT_METHODS) if v is not None]
+    row["mult_avg"] = sum(mults) / len(mults) if mults else None
+    row.update(run=run, ticker=ticker, scenario=selected, midpoint=_mid(base.get("perp"), base.get("exit")),
+               growth_model=base.get("growth_model", (None, None))[0],
+               growth_needed_perp=base.get("growth_needed", (None, None))[0],
+               growth_needed_exit=base.get("growth_needed", (None, None))[1])
     for name, key in (("Bear", "bear"), ("Bull", "bull")):
         s = by_scenario.get(name, {})
         row[key], row[f"{key}_perp"], row[f"{key}_exit"] = _mid(s.get("perp"), s.get("exit")), s.get("perp"), s.get("exit")
     price, mid = row["price"], row["midpoint"]
     row["upside"] = mid / price - 1 if price and mid is not None else None
+    row["upside_target"] = row["target"] / price - 1 if price and row["target"] is not None else None
     w = [x if isinstance(x, (int, float)) else None for x in (weights or (None, None, None))]
     row["w_bear"], row["w_base"], row["w_bull"] = w
+    ok = all(x is not None for x in w) and abs(sum(x or 0 for x in w) - 1) < 0.001
     parts = (row["bear"], mid, row["bull"])
-    if all(x is not None for x in w) and all(x is not None for x in parts) and abs(sum(w) - 1) < 0.001:
+    if ok and all(x is not None for x in parts):
         row["weighted"] = sum(a * b for a, b in zip(w, parts))
         row["upside_weighted"] = row["weighted"] / price - 1 if price else None
     else:
         row["weighted"] = row["upside_weighted"] = None
+    targets = (row["bear_target"], row["target"], row["bull_target"])
+    row["target_weighted"] = sum(a * b for a, b in zip(w, targets)) if ok and None not in targets else None
     notes = []
     if not price:
         notes.append("no share price (live price blank: check the ticker's exchange prefix or type an override)")
-    if mid is None:
+    if mid is None and row["mult_avg"] is None:
         notes.append("no value per share (check Shares outstanding and the gap messages from the build)")
+    elif mid is None:
+        notes.append("built without the DCF: see the multiples columns")
     if base.get("financial"):
         notes.append("financials template: the two values are residual income and exit P/B, at the cost of equity")
     if row["currency"] != "USD":
@@ -158,11 +181,13 @@ def read_workbook(xl, path, scenarios=SCENARIOS, extra=None):
             raise RuntimeError("built with an older layout: rebuild it first (./run TICKER)")
         summary, a = wb.Worksheets("Summary"), wb.Worksheets(SHEET_NAMES["INP"])
         get = lambda r, c: _call(lambda: summary.Cells(r, c).Value)
-        watch = [summary.Cells(5, 2)]
+        col_a = [row[0] for row in (_call(lambda: summary.Range("A1:A40").Value) or ())]
+        price_row = next((i + 1 for i, v in enumerate(col_a) if v == "Share price (US listing)"), 5)
+        watch = [summary.Cells(price_row, 2)]
         if _call(lambda: xl.Calculation) != -4105:                       # make sure calculation is automatic
             _call(lambda: setattr(xl, "Calculation", -4105))
         print(" prices", end="", flush=True)
-        _settle(xl, watch, need_number=summary.Cells(5, 2))
+        _settle(xl, watch, need_number=summary.Cells(price_row, 2))
         cell = a.Range(f"B{INPUT_ROWS['Scenario']}")
         weights = tuple(_num(_call(lambda k=k: a.Range(f"B{INPUT_ROWS[k]}").Value)) for k in ("w_bear", "w_base", "w_bull"))
         selected = _call(lambda: cell.Value)
@@ -257,12 +282,16 @@ def read_log(folder):
 
 COLUMNS = [  # (header, field, format, width)
     ("Ticker", "ticker", None, 9), ("Company", "company", None, 34), ("Price", "price", "usd_price", 11),
+    ("Price target", "target", "usd_price", 12), ("Upside to target", "upside_target", "pct", 11),
+    ("12-month target", "target_12m", "usd_price", 12),
+    ("Target, probability-weighted", "target_weighted", "usd_price", 13),
     ("DCF: perpetuity", "perp", "usd_price", 13), ("DCF: exit multiple", "exit", "usd_price", 13),
     ("Peer multiples", "peers", "usd_price", 13), ("DCF midpoint", "midpoint", "usd_price", 13),
     ("Upside to midpoint", "upside", "pct", 12), ("Bear", "bear", "usd_price", 11), ("Bull", "bull", "usd_price", 11),
     ("Probability-weighted value", "weighted", "usd_price", 13), ("Upside to weighted", "upside_weighted", "pct", 12),
     ("Revenue growth in model", "growth_model", "pct", 13), ("Growth the price needs (exit method)", "growth_needed_exit", "pct", 15),
-    ("WACC", "wacc", "pct", 8), ("Terminal growth", "terminal_growth", "pct", 9),
+    ("Forward P/E", "fwd_pe", "usd_price", 11), ("PEG", "peg", "usd_price", 11),
+    ("Average of multiples", "mult_avg", "usd_price", 12), ("WACC", "wacc", "pct", 8), ("Terminal growth", "terminal_growth", "pct", 9),
     ("DCF midpoint at the previous run", "prev_midpoint", "usd_price", 13), ("Change in midpoint", "midpoint_change", "pct", 11),
     ("Previous run", "prev_run", None, 16), ("Checks", "checks", None, 16),
     ("Notes", "note", None, 70)]
@@ -273,7 +302,9 @@ def write_book(folder, rows, history):
     ws = wb.active
     ws.title = "Portfolio"
     ws["A1"], ws["A1"].font = "Portfolio valuation roll-up", st.TITLE_FONT
-    ws["A2"] = (f"Read from the model workbooks on {rows[0]['run'] if rows else ''}. $ per US-listed share. DCF "
+    ws["A2"] = (f"Read from the model workbooks on {rows[0]['run'] if rows else ''}. $ per US-listed share. Price "
+                "target = your weighted blend of the methods (Summary tab), Base scenario; the probability-weighted "
+                "target blends the Bear / Base / Bull targets. DCF "
                 "midpoint = average of the two DCF methods under the Base scenario; Bear and Bull are the same "
                 "midpoint under those scenarios; the weighted value uses each workbook's scenario probabilities "
                 "(Inputs tab) and needs the full run, not --base-only. Static values: run the roll-up to refresh.")
@@ -283,16 +314,17 @@ def write_book(folder, rows, history):
         ws.cell(row=4, column=j).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         ws.column_dimensions[ws.cell(row=4, column=j).column_letter].width = width
     ws.row_dimensions[4].height = 44
-    ordered = sorted(rows, key=lambda r: (r["upside"] is None, -(r["upside"] or 0)))
+    up = lambda r: r.get("upside_target") if r.get("upside_target") is not None else r.get("upside")
+    ordered = sorted(rows, key=lambda r: (up(r) is None, -(up(r) or 0)))       # most upside to the target first
     for i, r in enumerate(ordered, start=5):
         for j, (_, field, fmt, _) in enumerate(COLUMNS, start=1):
             c = ws.cell(row=i, column=j, value=r.get(field))
             if fmt:
                 c.number_format = st.FMT[fmt]
         ws.cell(row=i, column=1).font = Font(bold=True)
-        ws.cell(row=i, column=7).font = Font(bold=True)
+        ws.cell(row=i, column=4).font = Font(bold=True)
     if ordered:
-        rng = f"H5:H{4 + len(ordered)}"
+        rng = f"E5:E{4 + len(ordered)}"
         ws.conditional_formatting.add(rng, CellIsRule(operator="greaterThan", formula=["0"], font=Font(color="006100")))
         ws.conditional_formatting.add(rng, CellIsRule(operator="lessThan", formula=["0"], font=Font(color="9C0006")))
     ws.freeze_panes = "C5"

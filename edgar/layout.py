@@ -22,7 +22,8 @@ import pandas as pd
 from openpyxl.utils import get_column_letter
 
 SHEET_NAMES = {"A": "Drivers", "IS": "Income Statement", "BS": "Balance Sheet", "CF": "Cash Flow",
-               "DCF": "DCF", "CHK": "Checks & Metrics", "SUM": "Summary", "INP": "Inputs"}
+               "DCF": "DCF", "CHK": "Checks & Metrics", "SUM": "Summary", "INP": "Inputs",
+               "MUL": "Multiples"}
 FIRST_ROW = 5
 
 # Revenue Build sheet (optional segment build; rows are fixed, columns follow the shared grid)
@@ -34,6 +35,7 @@ RB_MODEL = RB_TOTAL + 1               # reported / model revenue, for comparison
 RB_UNALLOC = RB_TOTAL + 2             # reported - segments (history only)
 RB_GROW_FIRST = RB_TOTAL + 4          # segment growth rows
 RB_GROW_TOTAL = RB_GROW_FIRST + RB_N
+RB_OVR_FIRST = RB_GROW_TOTAL + 3       # your growth overrides by segment and year (blank = the default above)
 RB_SWITCH = "$F$1"                    # "On" / "Off"
 
 SCENARIOS = ("Bear", "Base", "Bull")
@@ -45,7 +47,7 @@ BASIS_OPTIONS = ("3-yr avg", "Last FY", "LTM")
 INPUT_SPEC = [
     ("#", "Scenario"), "Scenario", "Basis", "Use YTD", "w_bear", "w_base", "w_bull", "w_total",
     ("#", "Share price and currency"), "Ticker", "Live close", "Price date", "Price override", "FX rate",
-    "FX override", "Shares per listing", "Share price", "Shares outstanding", "Market cap", "52w low", "52w high",
+    "FX override", "Shares per listing", "Share price", "Shares filed", "Shares override", "Shares outstanding", "Market cap", "52w low", "52w high",
     ("#", "Dilution"), "Options", "Option strike", "RSUs", "Diluted shares",
     ("#", "Discount rate"), "rf", "erp", "Beta benchmark", "Beta years", "Beta frequency", "Computed beta",
     "Adjusted beta", "beta", "kd",
@@ -104,6 +106,7 @@ class Row:
     bold: bool = False
     indent: int = 0
     note: str = ""
+    memo: bool = False        # a grey ratio line under a statement line (growth, margins): read-only
     default: str = "avg"      # Assumptions drivers: "avg" = from history (3-yr avg / last FY / LTM), "zero" = 0
     err_default: float = 0    # driver default when there is no history to average
     # Assumptions drivers: how Bear/Bull default relative to Base. ("rel", x): Bull = Base*(1+x), Bear = Base*(1-x)
@@ -137,6 +140,8 @@ def _revenue_fcst(c):
         ytd, ltm = c.ref("Revenue", c.g.ytd), c.ref("Revenue", c.g.ltm)
         growth = (f"IF(AND({USE_YTD},ISNUMBER({ytd}),ISNUMBER({ltm})),"
                   f"{ytd}+({ltm}-{ytd})*(1+{c.v('Revenue growth')}),{growth})")
+    if not c.g.rev_build:                                   # built without the Revenue Build tab
+        return "=" + growth
     return (f'=IF(AND({rb}{RB_SWITCH}="On",SUM({rb}${last}${RB_SEG_FIRST}:${last}${RB_TOTAL - 1})>0),'
             f"{rb}{c.col.L}{RB_TOTAL}*1000000,{growth})")
 
@@ -452,6 +457,18 @@ METRIC_ROWS = [
     Calc("Net debt / EBITDA", fmt="x", **_both(_ratio("Net debt", "EBITDA"))),
 ]
 
+# Memo lines on the income statement: growth and margins right under the lines they describe, so the
+# statement reads on its own (the same ratios are on Checks & Metrics).
+_growth = _prev_needed(lambda c: f'=IF({_blank(c.v("Revenue"), c.p("Revenue"))},"",IFERROR({c.v("Revenue")}/{c.p("Revenue")}-1,""))')
+for _after, _row in (("Revenue", Calc("Revenue growth (y/y)", fmt="pct", memo=True, indent=1, plug=_growth, fcst=_growth)),
+                     ("Gross Profit", Calc("Gross margin (%)", fmt="pct", memo=True, indent=1,
+                                           **_both(_ratio("Gross Profit", "Revenue")))),
+                     ("Operating Income", Calc("Operating margin (%)", fmt="pct", memo=True, indent=1,
+                                               **_both(_ratio("Operating Income", "Revenue")))),
+                     ("Net Income", Calc("Net margin (%)", fmt="pct", memo=True, indent=1,
+                                         **_both(_ratio("Net Income", "Revenue"))))):
+    IS_ROWS.insert(next(i for i, r in enumerate(IS_ROWS) if r.label == _after) + 1, _row)
+
 ROW_BY_LABEL = {r.label: r for rows in (IS_ROWS, BS_ROWS, CF_ROWS, DRIVER_ROWS, CHECK_ROWS, METRIC_ROWS) for r in rows}
 
 
@@ -491,6 +508,7 @@ class Grid:
         for k in range(1, n_fcst + 1):
             self.cols.append(Col("fcst", f"FY{base + k}E", None, j))
             j += 1
+        self.rev_build = True     # False when the workbook is built without the Revenue Build tab
         self.hist = [c for c in self.cols if c.kind == "hist"]
         self.fcst = [c for c in self.cols if c.kind == "fcst"]
         self.last_fy = self.hist[-1]
@@ -510,7 +528,14 @@ class Grid:
         self.scen_title = self.driver_last + 2
         self.scen_first = self.scen_title + 3                    # after the title and two header rows
         self.scen_rows = {r.label: self.scen_first + i for i, r in enumerate(DRIVER_ROWS)}
-        self.val_title = self.scen_first + len(DRIVER_ROWS) + 1
+        # your overrides of that table: same shape, directly below it
+        self.scen_ovr_title = self.scen_first + len(DRIVER_ROWS) + 1
+        self.scen_ovr_first = self.scen_ovr_title + 3
+        self.scen_ovr_rows = {r.label: self.scen_ovr_first + i for i, r in enumerate(DRIVER_ROWS)}
+        self.val_title = self.scen_ovr_first + len(DRIVER_ROWS) + 1
+        # per-year overrides of the driver rows at the top: same columns, below the results
+        self.year_ovr_title = self.val_title + 4
+        self.year_ovr_rows = {r.label: self.year_ovr_title + 2 + i for i, r in enumerate(DRIVER_ROWS)}
         self.ltm = next((c for c in self.cols if c.kind == "ltm"), None)
         self.ytd = next((c for c in self.cols if c.kind == "ytd"), None)
         self.metric_header = FIRST_ROW + len(CHECK_ROWS) + 1

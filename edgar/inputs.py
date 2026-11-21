@@ -6,6 +6,7 @@ any registered cell whose value no longer equals its default was changed by the 
 cell with the same key in the new workbook - so inputs survive new filings, extra years and layout changes.
 Workbooks made before this existed are read by their row labels instead (legacy_inputs)."""
 import json
+import re
 import shutil
 from datetime import date, datetime
 from pathlib import Path
@@ -13,16 +14,29 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 SHEET = "_inputs"
+# input-key prefix -> the tab whose absence means "part switched off" (DCF and beta settings sit on Inputs but
+# belong to the DCF part)
+PART_TABS = {"DCF": "DCF", "Market": "DCF", "Multiples": "Multiples", "Comps": "Comps", "Build": "Revenue Build"}
+# Summary weights belong to the part that produces each method's value
+WEIGHT_TABS = {"DCF: perpetuity growth": "DCF", "DCF: exit multiple": "DCF", "Peer multiples": "Comps",
+               "Forward P/E": "Multiples", "PEG": "Multiples", "Forward EV/EBITDA": "Multiples",
+               "Forward EV/Sales": "Multiples", "Price / free cash flow": "Multiples"}
+PARKED = "(parked)"     # inputs from a tab left out of a build, kept in _inputs until the tab is built again
 
 
 class Registry:
     def __init__(self):
         self.items = {}          # key -> (sheet title, cell address, default value)
 
-    def add(self, ws, cell, *key):
+    def add(self, ws, cell, *key, mark=True):
+        """Register an input cell and give it the input look (Notes lines are free text and stay plain;
+        mark=False for a formula cell the user may type over, as in the financials template)."""
         k = "|".join(str(p) for p in key)
         assert k not in self.items, f"duplicate input key {k}"
         self.items[k] = (ws.title, cell.coordinate, cell.value)
+        if mark and key[0] != "Notes":
+            from .xl_style import mark_input
+            mark_input(cell)
         return cell
 
     def write(self, wb):
@@ -34,9 +48,11 @@ class Registry:
 
 
 def _norm(v):
-    """Excel rewrites formulas slightly when it saves (drops quotes around simple sheet names, etc.)."""
+    """Excel rewrites formulas slightly when it saves: it drops quotes around simple sheet names, the _xlfn.
+    prefixes and spaces, and writes 20.0 as 20."""
     if isinstance(v, str) and v.startswith("="):
-        return v.replace(" ", "").replace("'", "").replace("_xlfn.", "").upper()
+        v = v.replace(" ", "").replace("'", "").replace("_xlfn.", "").upper()
+        return re.sub(r"(?<![\w.])(\d+)\.0+(?![\d])", r"\1", v)
     return v
 
 
@@ -59,7 +75,10 @@ def _usable(v):
 def _registered_edits(old):
     """key -> (value, old sheet, old address) for registered cells the user changed."""
     out = {}
-    for key, sheet, addr, default in old[SHEET].iter_rows(min_row=2, values_only=True):
+    for key, sheet, addr, default in old[SHEET].iter_rows(min_row=2, max_col=4, values_only=True):
+        if sheet == PARKED:
+            out[key] = (json.loads(default), PARKED, "")
+            continue
         if sheet not in old.sheetnames:
             continue
         v = old[sheet][addr].value
@@ -103,20 +122,30 @@ def _legacy_edits(old):
 
 def carry_over(old_path, wb, reg, reset=()):
     """Copy the user's inputs from the previous workbook into the new one. Inputs whose key contains one of
-    the `reset` words (any case) are left at their new defaults instead.
-    Returns (kept, dropped): lists of (key, value) and (key, reason)."""
+    the `reset` words (any case) are left at their new defaults instead. Inputs on a tab this build leaves out
+    (a part switched off) are parked in the new _inputs sheet and come back when the tab is built again.
+    Returns (kept, dropped, parked): lists of (key, value), (key, reason) and (key, value)."""
     try:
         old = load_workbook(old_path)
     except Exception as e:                                   # unreadable file: build fresh, say so
-        return [], [("(whole file)", f"could not read {Path(old_path).name}: {e}")]
+        return [], [("(whole file)", f"could not read {Path(old_path).name}: {e}")], []
     edits = _registered_edits(old) if SHEET in old.sheetnames else _legacy_edits(old)
-    kept, dropped = [], []
+    kept, dropped, parked = [], [], []
     for key, (v, old_sheet, old_addr) in edits.items():
         if any(w.lower() in key.lower() for w in reset):
             dropped.append((key, f"reset to its default as asked (was {v})"))
             continue
         if key not in reg.items:
-            dropped.append((key, "no matching cell in the new layout (e.g. that forecast year is now actual)"))
+            # an input of a part this build leaves out waits in _inputs; anything else (a forecast year that is
+            # now actual, say) is gone for good
+            parts_of_key = key.split("|")
+            tab = (WEIGHT_TABS.get(parts_of_key[-1]) if parts_of_key[:2] == ["Summary", "Weight"]
+                   else PART_TABS.get(parts_of_key[0]))
+            if tab and tab not in wb.sheetnames and not _is_formula(v) and SHEET in wb.sheetnames:
+                wb[SHEET].append([key, PARKED, "", json.dumps(v, default=str)])
+                parked.append((key, v))
+            else:
+                dropped.append((key, "no matching cell in the new layout (e.g. that forecast year is now actual)"))
             continue
         sheet, addr, default = reg.items[key]
         if _same(v, default):
@@ -126,7 +155,7 @@ def carry_over(old_path, wb, reg, reset=()):
             continue
         wb[sheet][addr].value = v
         kept.append((key, v))
-    return kept, dropped
+    return kept, dropped, parked
 
 
 def backup(path):

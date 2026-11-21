@@ -28,6 +28,7 @@ class Financials:
     ytd: dict = None            # label -> fiscal year-to-date value at ltm_end (flows only), from the latest 10-Q
     ytd_months: int = 0         # months covered by ytd
     dilution: dict = None       # {"options", "strike", "rsus"} from the latest annual report, where tagged
+    brand: str = None           # accent colour (hex) for the workbook, from watchlist.json "brand_colors"
 
     def looks_financial(self):
         """Banks, insurers and asset managers: no classified balance sheet and no operating-income line.

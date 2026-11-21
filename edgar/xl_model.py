@@ -1,24 +1,26 @@
 """LOAD: build the model workbook (Assumptions, IS, BS, CF, DCF, Checks & Metrics, Mapping, Raw)."""
+import json
 from datetime import date
 
 from openpyxl import Workbook
 from openpyxl.formatting.rule import FormulaRule
-from openpyxl.styles import Alignment
+from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
-from . import xl_dcf
+from . import xl_dcf, xl_multiples
+from .parts import KEY as PARTS_KEY, PARTS
 from . import xl_style as st
 from .comps import _metrics, write_comps
 from .inputs import Registry
 from .layout import (BASIS_CELL, BASIS_OPTIONS, BS_ROWS, CF_ROWS, CHECK_ROWS, DRIVER_ROWS, IS_ROWS,
-                     METRIC_ROWS, input_ref,
+                     INPUT_ROWS, METRIC_ROWS, input_ref,
                      FIRST_ROW, RB_SHEET, ROW_BY_LABEL, SCENARIO_CELL, SCENARIOS, SHEET_NAMES, Ctx, Grid)
 from .mapping import MAP_BY_LABEL, fmt_tag
 from .xl_build import write_build
 from .xl_dcf import write_dcf
 from .xl_inputs import write_inputs, write_notes
-from .xl_summary import write_summary
+from .xl_summary import write_banners, write_summary
 
 STATEMENTS = (("IS", IS_ROWS), ("BS", BS_ROWS), ("CF", CF_ROWS))
 
@@ -35,6 +37,7 @@ class Model:
         self.data = {}      # label -> {column index: value}
         self.reg = Registry()   # every input cell, so a rebuild can keep what the user typed
         self.comps = None       # {multiple: peer-median cell reference} when a Comps tab is built
+        self.parts = set(PARTS)  # optional parts built (parts.py)
         for col in self.grid.cols:
             if col.kind == "hist":
                 for label, series in fin.values.items():
@@ -98,7 +101,7 @@ def write_rows(ws, key, rows, m):
     for row in rows:
         r = g.rows[row.label][1]
         label = ws.cell(row=r, column=1, value=row.label)
-        label.font = st.font(bold=row.bold)
+        label.font = st.font(st.GREY, italic=True) if row.memo else st.font(bold=row.bold)
         label.alignment = Alignment(indent=row.indent)
         if row.data and not m.reported_anywhere(row):
             label.value = f"{row.label}  (not reported)"
@@ -112,6 +115,9 @@ def write_rows(ws, key, rows, m):
                 f = row.fcst(c) if row.fcst else None
                 if f:
                     _put_formula(cell, f, row.bold)
+                    if row.memo:
+                        cell.font = st.font(st.GREY, italic=True)
+                continue
             elif row.data and m.has_data(row.label, col):
                 cell.value = m.data[row.label][col.j]
                 cell.font = st.font(st.BLUE, row.bold)
@@ -121,14 +127,24 @@ def write_rows(ws, key, rows, m):
                     _put_formula(cell, f, row.bold)
             elif m.uses_fallback(row, col):
                 _put_formula(cell, row.fallback(c), row.bold)
+            if row.memo:
+                cell.font = st.font(st.GREY, italic=True)
+
+
+def _rules(ws, m, rows):
+    g = m.grid
+    placed = [(g.rows[r.label][1], r.bold) for r in rows if r.label in g.rows]
+    st.row_rules(ws, [r for r, _ in placed], g.cols[-1].j, bold_rows={r for r, b in placed if b})
 
 
 def write_statement(ws, key, rows, m):
     fin = m.fin
     write_header(ws, m.grid, f"{fin.name} ({fin.ticker}) - {SHEET_NAMES[key]}",
-                 "Blue = SEC filings, black = formula, green = link. Shaded columns are forecasts driven by the "
-                 "Assumptions tab." + ("" if fin.currency == "USD" else f" Amounts are in {fin.currency}."))
+                 "Nothing to type here: blue = SEC filings, black = formula, green = link. Shaded columns are "
+                 "forecasts driven by the Drivers tab." + ("" if fin.currency == "USD" else
+                                                         f" Amounts are in {fin.currency}."))
     write_rows(ws, key, rows, m)
+    _rules(ws, m, rows)
 
 
 def _choices(options):
@@ -150,7 +166,8 @@ def write_assumptions(ws, m):
     g, fin = m.grid, m.fin
     write_header(ws, g, f"{fin.name} ({fin.ticker}) - Drivers",
                  "Forecast columns follow the selected scenario's year-1, mid-point and final-year values (table "
-                 "below). Type over any forecast cell to override that year (it turns yellow).", first="Driver")
+                 "below). " + st.INPUT_LEGEND + " To change a driver, use the Your overrides tables further down; "
+                 "a year you have overridden is shaded orange here.", first="Driver")
     # The scenario and the base-case starting point are chosen on the Inputs tab; shown here for reference
     # (the formulas on this tab read these two cells).
     for addr, label_addr, label, key in ((SCENARIO_CELL, "E1", "Scenario:", "Scenario"),
@@ -159,7 +176,7 @@ def write_assumptions(ws, m):
         ws[label_addr].alignment = Alignment(horizontal="right")
         c = ws[addr.replace("$", "")]
         c.value, c.font, c.alignment = f"={input_ref(key)}", st.font(st.GREEN, True), st.CENTER
-    ws["K1"], ws["K1"].font = "(set on the Inputs tab)", st.NOTE_FONT
+    st.link_to(ws["K1"], SHEET_NAMES["INP"], f"B{INPUT_ROWS['Scenario']}", "(change on the Inputs tab)")
     for title, hr in g.driver_headings.items():
         st.header_cell(ws.cell(row=hr, column=1), title, "ltm")
         ws.cell(row=hr, column=1).alignment = Alignment(horizontal="left")
@@ -185,31 +202,32 @@ def write_assumptions(ws, m):
             k = g.fcst.index(col) + 1                    # forecast year 1..n
             y1, ym, yn = (f"${L}${sr}" for L in SEL)
             if k == 1:
-                cell.value = f"={y1}"
+                path = f"{y1}"
             elif k <= mid:
-                cell.value = f"={y1}+({ym}-{y1})*{k - 1}/{mid - 1}"
+                path = f"{y1}+({ym}-{y1})*{k - 1}/{mid - 1}"
             else:
-                cell.value = f"={ym}+({yn}-{ym})*{k - mid}/{n - mid}"
+                path = f"{ym}+({yn}-{ym})*{k - mid}/{n - mid}"
+            ov = f"{col.L}${g.year_ovr_rows[row.label]}"           # your override for this year, if any
+            cell.value = f'=IF({ov}="",{path},{ov})'
             cell.font = st.font()
-            m.reg.add(ws, cell, "Live", row.label, col.header)
         if row.note:
-            ws.cell(row=r, column=g.cols[-1].j + 1, value=row.note).font = st.NOTE_FONT
-    first_r, last_r = FIRST_ROW, g.driver_last
-    top = f"{g.fcst[0].L}{first_r}"
-    ws.conditional_formatting.add(                      # a typed number in a forecast cell = a per-year override
-        f"{top}:{g.fcst[-1].L}{last_r}",
-        FormulaRule(formula=[f'AND(NOT(ISFORMULA({top})),{top}<>"")'], font=st.font(st.BLUE, True), fill=st.INPUT_FILL))
+            st.hover_note(ws.cell(row=r, column=g.cols[-1].j + 1), row.note).font = st.NOTE_FONT
+    for row in DRIVER_ROWS:                             # a year with an override is shaded up here too
+        r, orow = g.rows[row.label][1], g.year_ovr_rows[row.label]
+        ws.conditional_formatting.add(
+            f"{g.fcst[0].L}{r}:{g.fcst[-1].L}{r}",
+            FormulaRule(formula=[f'{g.fcst[0].L}${orow}<>""'], font=st.font(st.BLUE, True), fill=st.OVERRIDDEN_FILL))
 
     # ---- scenario inputs: year 1, a mid-point and the final year for Bear / Base / Bull, plus the selected set
     t = g.scen_title
     points = ("Year 1", "Mid", "Final year")
     heads = (g.fcst[0].header, g.fcst[mid - 1].header, g.fcst[-1].header)
-    ws.cell(row=t, column=1, value="Scenario inputs").font = st.font(bold=True)
+    ws.cell(row=t, column=1, value="Scenario inputs (defaults)").font = st.font(bold=True)
     ws.cell(row=t, column=2, value="Each driver runs in straight lines from the first forecast year to the mid-point to "
                                    "the final year, which should be a steady state. Base year 1 comes from history "
-                                   "(\"Base starts from\"); growth fades toward the DCF terminal growth; Bear and "
-                                   "Bull default to Base -/+ a spread on growth, gross margin and SG&A. Overwrite "
-                                   "any blue cell.").font = st.NOTE_FONT
+                                   "(\"Base starts from\"); growth fades toward the terminal growth; Bear and "
+                                   "Bull default to Base -/+ a spread on growth, gross margin and SG&A. To change "
+                                   "one, use the Your overrides table below.").font = st.NOTE_FONT
     st.header_cell(ws.cell(row=t + 1, column=1), "")
     st.header_cell(ws.cell(row=t + 2, column=1), "Driver")
     for i, name in enumerate(SCENARIOS + ("Selected",)):
@@ -217,10 +235,24 @@ def write_assumptions(ws, m):
             j = 2 + 3 * i + k
             st.header_cell(ws.cell(row=t + 1, column=j), name, "ltm" if name == "Selected" else "label")
             st.header_cell(ws.cell(row=t + 2, column=j), sub, "ltm" if name == "Selected" else "label")
-    g_term = xl_dcf.ref("g")
+    g_term = input_ref("g")
+    ot = g.scen_ovr_title
+    ws.cell(row=ot, column=1, value="Your overrides").font = st.font(bold=True)
+    ws.cell(row=ot, column=2, value="Type a value to replace the default in the same place in the table above; "
+                                    "clear it to go back to the default. Bear and Bull defaults follow your Base "
+                                    "overrides.").font = st.NOTE_FONT
+    st.header_cell(ws.cell(row=ot + 1, column=1), "")
+    st.header_cell(ws.cell(row=ot + 2, column=1), "Driver")
+    for i, name in enumerate(SCENARIOS):
+        for k, sub in enumerate(heads):
+            st.header_cell(ws.cell(row=ot + 1, column=2 + 3 * i + k), name, "ltm")
+            st.header_cell(ws.cell(row=ot + 2, column=2 + 3 * i + k), sub, "ltm")
     for row in DRIVER_ROWS:
         r, sr = g.rows[row.label][1], g.scen_rows[row.label]
+        orow = g.scen_ovr_rows[row.label]
+        u = lambda L, sr=sr, orow=orow: f'IF({L}{orow}="",{L}{sr},{L}{orow})'      # the value in use
         ws.cell(row=sr, column=1, value=row.label)
+        ws.cell(row=orow, column=1, value=row.label)
         if row.default == "zero":
             base1 = 0
         else:
@@ -231,9 +263,9 @@ def write_assumptions(ws, m):
             base1 = f"=MIN({row.base_cap},{pickd})" if row.base_cap is not None else f"={pickd}"
         if row.label == "Revenue growth":
             # Growth halves by the mid-point and is halfway to the terminal rate by the final year, never below it.
-            base = (base1, f"=MAX({g_term},E{sr}/2)", f"=MAX({g_term},(F{sr}+{g_term})/2)")
+            base = (base1, f"=MAX({g_term},{u('E')}/2)", f"=MAX({g_term},({u('F')}+{g_term})/2)")
         else:
-            base = (base1, f"=E{sr}", f"=F{sr}")
+            base = (base1, f"={u('E')}", f"={u('F')}")
 
         def shifted(cell, sign):
             """Bear (sign -1) / Bull (sign +1) default as a formula off the Base cell."""
@@ -244,15 +276,18 @@ def write_assumptions(ws, m):
             f = f"{cell}*(1{op}{abs(x)})" if kind == "rel" else f"{cell}{op}MAX(0.01,ABS({cell})*{abs(x)})"
             return f"=MIN({row.cap},{f})" if row.cap is not None else f"={f}"
 
-        values = {"Bear": tuple(shifted(f"{L}{sr}", -1) for L in "EFG"), "Base": base,
-                  "Bull": tuple(shifted(f"{L}{sr}", 1) for L in "EFG")}
+        values = {"Bear": tuple(shifted(u(L), -1) for L in "EFG"), "Base": base,
+                  "Bull": tuple(shifted(u(L), 1) for L in "EFG")}
         for i, name in enumerate(SCENARIOS):
             for k, sub in enumerate(points):
                 c = ws.cell(row=sr, column=2 + 3 * i + k, value=values[name][k])
-                c.number_format, c.font = st.FMT[row.fmt], st.font(st.BLUE)
-                m.reg.add(ws, c, "Scenario", row.label, name, sub)
+                c.number_format = st.FMT[row.fmt]
+                c.font = st.formula_font(c.value) if isinstance(c.value, str) else st.font()
+                o = ws.cell(row=orow, column=2 + 3 * i + k)
+                o.number_format = st.FMT[row.fmt]
+                m.reg.add(ws, o, "Scenario", row.label, name, sub)
         for k, cols in enumerate((("B", "E", "H"), ("C", "F", "I"), ("D", "G", "J"))):
-            c = ws.cell(row=sr, column=11 + k, value=f"=CHOOSE({pick}," + ",".join(f"{L}{sr}" for L in cols) + ")")
+            c = ws.cell(row=sr, column=11 + k, value=f"=CHOOSE({pick}," + ",".join(u(L) for L in cols) + ")")
             c.number_format, c.font = st.FMT[row.fmt], st.font(bold=True)
 
     # ---- headline results for the selected scenario (flip the Scenario dropdown to compare).
@@ -261,11 +296,16 @@ def write_assumptions(ws, m):
     v = g.val_title
     ws.cell(row=v, column=1, value="Results for the selected scenario").font = st.font(bold=True)
     ws.cell(row=v, column=2, value="Change the Scenario dropdown (F1) to see Bear / Base / Bull.").font = st.NOTE_FONT
-    heads = [("DCF: perpetuity growth", xl_dcf.ref("per_share", "B"), "price"),
-             ("DCF: exit multiple", xl_dcf.ref("per_share", "C"), "price"),
-             ("Upside (perpetuity)", xl_dcf.ref("upside", "B"), "pct"),
-             ("Upside (exit multiple)", xl_dcf.ref("upside", "C"), "pct"),
-             (f"{g.fcst[-1].header} revenue", f"'{SHEET_NAMES['IS']}'!${g.fcst[-1].L}${g.rows['Revenue'][1]}", "usd"),
+    heads = []
+    if "dcf" in m.parts:
+        heads += [("DCF: perpetuity growth", xl_dcf.ref("per_share", "B"), "price"),
+                  ("DCF: exit multiple", xl_dcf.ref("per_share", "C"), "price"),
+                  ("Upside (perpetuity)", xl_dcf.ref("upside", "B"), "pct"),
+                  ("Upside (exit multiple)", xl_dcf.ref("upside", "C"), "pct")]
+    if "multiples" in m.parts:
+        heads += [("Forward P/E value", xl_multiples.ref("pe"), "price"), ("PEG value", xl_multiples.ref("peg"), "price"),
+                  ("Average of multiples", xl_multiples.ref("average"), "price")]
+    heads += [(f"{g.fcst[-1].header} revenue", f"'{SHEET_NAMES['IS']}'!${g.fcst[-1].L}${g.rows['Revenue'][1]}", "usd"),
              (f"{g.fcst[-1].header} EPS", f"'{SHEET_NAMES['IS']}'!${g.fcst[-1].L}${g.rows['Diluted EPS'][1]}", "eps")]
     st.header_cell(ws.cell(row=v + 1, column=1), "Scenario")
     c = ws.cell(row=v + 2, column=1, value=f"={SCENARIO_CELL}")
@@ -274,11 +314,43 @@ def write_assumptions(ws, m):
         j = 2 + i
         st.header_cell(ws.cell(row=v + 1, column=j), h, "fcst")
         ws.cell(row=v + 1, column=j).alignment = Alignment(horizontal="center", wrap_text=True)
-        c = ws.cell(row=v + 2, column=j, value=f"={target}")
+        c = ws.cell(row=v + 2, column=j, value=f'=IF({target}="","",{target})')
         c.number_format, c.font = st.FMT[fmt], st.font(bold=True)
     ws.row_dimensions[v + 1].height = 30
 
+    # ---- per-year overrides: one row per driver, same columns as the driver rows at the top
+    yt = g.year_ovr_title
+    _drivers_layout(ws, m)
+    ws.cell(row=yt, column=1, value="Your overrides by year").font = st.font(bold=True)
+    ws.cell(row=yt, column=2, value="Type a value to fix one driver in one forecast year (it is shaded orange at the "
+                                    "top of the tab); clear it to go back to the scenario path.").font = st.NOTE_FONT
+    st.header_cell(ws.cell(row=yt + 1, column=1), "Driver")
+    for col in g.fcst:
+        st.header_cell(ws.cell(row=yt + 1, column=col.j), col.header, "ltm")
+    for row in DRIVER_ROWS:
+        r = g.year_ovr_rows[row.label]
+        ws.cell(row=r, column=1, value=row.label)
+        for col in g.fcst:
+            c = ws.cell(row=r, column=col.j)
+            c.number_format = st.FMT[row.fmt]
+            m.reg.add(ws, c, "Live", row.label, col.header)
+
     ws.column_dimensions[get_column_letter(g.cols[-1].j + 1)].width = 60
+
+
+def _drivers_layout(ws, m):
+    """Row separators, and the three lower blocks as collapsible groups (the +/- buttons in the margin)."""
+    g = m.grid
+    last = g.cols[-1].j
+    st.row_rules(ws, [g.rows[r.label][1] for r in DRIVER_ROWS], last)
+    st.row_rules(ws, list(g.scen_rows.values()) + list(g.scen_ovr_rows.values()), 13)
+    st.row_rules(ws, list(g.year_ovr_rows.values()), last)
+    ws.sheet_properties.outlinePr.summaryBelow = False
+    for title, first, end in ((g.scen_title, g.scen_title + 1, max(g.scen_rows.values())),
+                              (g.scen_ovr_title, g.scen_ovr_title + 1, max(g.scen_ovr_rows.values())),
+                              (g.year_ovr_title, g.year_ovr_title + 1, max(g.year_ovr_rows.values()))):
+        ws.row_dimensions.group(first, end, outline_level=1, hidden=False)
+        ws.cell(row=title, column=1).font = Font(bold=True, size=12, color=st.THEME["accent"])
 
 
 def write_checks(ws, m):
@@ -298,8 +370,24 @@ def write_checks(ws, m):
                 f'"CHECK ERRORS - see rows {first}-{last}")')
     ws["D1"].font = st.font(bold=True)
     write_rows(ws, "CHK", CHECK_ROWS, m)
-    ws.cell(row=g.metric_header, column=1, value="Metrics").font = st.font(bold=True)
+    # each check: a green tick when every column is within tolerance, a red cross otherwise
+    status = g.cols[-1].j + 1
+    st.header_cell(ws.cell(row=first - 1, column=status), "Status")
+    for r in range(first, last + 1):
+        row_rng = f"B{r}:{g.cols[-1].L}{r}"
+        c = ws.cell(row=r, column=status, value=f'=IF(COUNTIF({row_rng},">"&$G$1)+COUNTIF({row_rng},"<-"&$G$1)=0,"✓","✗")')
+        c.alignment, c.font = st.CENTER, Font(bold=True, size=12)
+    col = get_column_letter(status)
+    ws.conditional_formatting.add(f"{col}{first}:{col}{last}", FormulaRule(formula=[f'{col}{first}="✓"'],
+                                                                           font=Font(color="1E7B34", bold=True)))
+    ws.conditional_formatting.add(f"{col}{first}:{col}{last}", FormulaRule(formula=[f'{col}{first}="✗"'],
+                                                                           font=Font(color="B42318", bold=True),
+                                                                           fill=st.WARN_FILL))
+    ws.conditional_formatting.add(rng, FormulaRule(formula=[f'AND(ISNUMBER(B{first}),ABS(B{first})>$G$1)'],
+                                                   font=Font(color="B42318", bold=True)))
+    st.section(ws, g.metric_header, 1, g.cols[-1].j, "Metrics")
     write_rows(ws, "CHK", METRIC_ROWS, m)
+    st.row_rules(ws, [g.rows[r.label][1] for r in CHECK_ROWS + METRIC_ROWS], g.cols[-1].j)
 
 
 def write_mapping(ws, fin):
@@ -334,52 +422,75 @@ def write_raw(ws, src):
 
 TAB_COLORS = {"Summary": "1F3864", "Inputs": "BF8F00", "Drivers": "BF8F00", RB_SHEET: "BF8F00",
               "Income Statement": "1E5C4F", "Balance Sheet": "1E5C4F", "Cash Flow": "1E5C4F",
-              "DCF": "7030A0", "Comps": "7030A0", "Checks & Metrics": "7030A0",
+              "WACC": "7030A0", "DCF": "7030A0", "Multiples": "7030A0", "Comps": "7030A0", "Checks & Metrics": "7030A0",
               "Notes": "808080", "Mapping": "808080", "Raw": "808080"}
-TAB_ORDER = ["Summary", "Inputs", "Drivers", RB_SHEET, "Income Statement", "Balance Sheet", "Cash Flow", "DCF",
-             "Comps", "Checks & Metrics", "Notes", "Mapping", "Raw", xl_dcf.CALC_SHEET]
+TAB_ORDER = ["Summary", "Inputs", "Drivers", RB_SHEET, "Income Statement", "Balance Sheet", "Cash Flow", "WACC",
+             "DCF", "Multiples", "Comps", "Checks & Metrics", "Notes", "Mapping", "Raw", xl_dcf.CALC_SHEET]
 
 
-def build_workbook(fin, n_fcst=10, peers=(), template=None):
+def build_workbook(fin, n_fcst=10, peers=(), template=None, parts=None):
     """template: "standard", "financial", or None to pick the financials template for banks and insurers.
     peers: _metrics() rows for comparable companies; adds a Comps tab and links the DCF exit multiple to it.
-    Tabs: Summary | Inputs, Drivers, Revenue Build (yours to change) | the three statements | DCF, Comps, Checks
-    | Notes, Mapping, Raw (reference). Working cells and the input registry sit on hidden sheets."""
+    parts: which optional parts to build (see parts.py; default all). The three statements are always built.
+    Tabs: Summary | Inputs, Drivers, Revenue Build (yours to change) | the three statements | DCF, Multiples,
+    Comps, Checks | Notes, Mapping, Raw (reference). Working cells and the input registry sit on hidden sheets."""
     st.set_currency(fin.currency)
+    st.set_theme(fin.brand)
+    parts = set(PARTS) if parts is None else set(parts)
+    if not peers:
+        parts.discard("comps")
     if template == "financial" or (template is None and fin.looks_financial()):
         from .xl_fin import build_financial
         return build_financial(fin, n_fcst)
     m = Model(fin, n_fcst)
+    m.parts = parts
+    m.grid.rev_build = "revenue_build" in parts
+    wanted = {"DCF": "dcf", "WACC": "dcf", xl_dcf.CALC_SHEET: "dcf", "Multiples": "multiples", "Comps": "comps",
+              RB_SHEET: "revenue_build"}
     wb = Workbook()
     wb.active.title = SHEET_NAMES["A"]
-    sheets = {"A": wb.active}
     for name in TAB_ORDER:
-        if name == "Comps" and not peers:
+        if name in wanted and wanted[name] not in parts:
             continue
         if name not in wb.sheetnames:
             wb.create_sheet(name)
     wb._sheets = [wb[n] for n in TAB_ORDER if n in wb.sheetnames]
-    for key in ("IS", "BS", "CF", "DCF", "CHK", "SUM", "INP"):
-        sheets[key] = wb[SHEET_NAMES[key]]
-    if peers:
+    sheets = {key: wb[SHEET_NAMES[key]] for key in ("A", "IS", "BS", "CF", "CHK", "SUM", "INP")}
+    if "comps" in parts:
         m.comps = write_comps(list(peers), wb["Comps"], subject=_metrics(fin),
                               price_ref=Ctx(m.grid, "CMP", m.grid.last_fy).market("Share price"), reg=m.reg)
+    if "dcf" in parts:
+        write_dcf(wb["DCF"], m, wb[xl_dcf.CALC_SHEET])     # declares the valuation settings shown on Inputs
+        from .xl_wacc import write_wacc
+        write_wacc(wb["WACC"], m)                           # ... and the discount-rate ones
+        wb[xl_dcf.CALC_SHEET].sheet_state = "hidden"
+    else:
+        # the forecast still needs a long-run growth rate: revenue growth fades toward it
+        m.settings["g"] = {"label": "Terminal growth", "value": xl_dcf.DEFAULTS["g"], "fmt": "pct",
+                           "note": "Long-run growth: the revenue growth path on the Drivers tab fades toward it"}
     write_assumptions(sheets["A"], m)
-    write_build(wb[RB_SHEET], m, write_header)
+    if "revenue_build" in parts:
+        write_build(wb[RB_SHEET], m, write_header)
     for key, rows in STATEMENTS:
         write_statement(sheets[key], key, rows, m)
-    write_dcf(sheets["DCF"], m, wb[xl_dcf.CALC_SHEET])
+    if "multiples" in parts:
+        xl_multiples.write_multiples(wb["Multiples"], m)
     write_inputs(sheets["INP"], m)                 # after the DCF: it places the settings the DCF declared
     write_checks(sheets["CHK"], m)
     write_notes(wb["Notes"], m)
     write_mapping(wb["Mapping"], fin)
     write_raw(wb["Raw"], fin.sources)
     write_summary(sheets["SUM"], m)
-    wb[xl_dcf.CALC_SHEET].sheet_state = "hidden"
+    write_banners(wb, m)
     for name, color in TAB_COLORS.items():
         if name in wb.sheetnames:
             wb[name].sheet_properties.tabColor = color
+    for ws in wb.worksheets:                                # the house style: title bars, no gridlines
+        if ws.title not in ("Summary", "Mapping", "Raw", xl_dcf.CALC_SHEET):
+            st.title_bar(ws)
+    wb["Summary"].sheet_properties.tabColor = st.THEME["accent"]
     m.reg.write(wb)
+    wb["_inputs"].append([PARTS_KEY, "", "", json.dumps(sorted(parts))])   # what this workbook was built with
     wb.active = 0                                           # open on the summary
     return wb, m
 
@@ -406,8 +517,8 @@ def gap_report(m, facts):
     end = fin.cols[-1].date().isoformat()
     gaps = [(label, words) for label, words in GAP_HINTS.items() if not m.reported_anywhere(ROW_BY_LABEL[label])]
     if not fin.shares_out[0]:
-        print("  ! Shares outstanding not found in the SEC data: type the share count into the Assumptions tab "
-              "(Market data), otherwise there is no value per share.")
+        print("  ! Shares outstanding not found in the SEC data: type the share count in \"Shares outstanding "
+              "override\" on the Inputs tab, otherwise there is no value per share.")
     if not gaps:
         return 0 if fin.shares_out[0] else 1
     print(f"  ! {len(gaps)} line(s) the valuation uses came back empty. Closest tags this company reports for "

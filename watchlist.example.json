@@ -1,5 +1,6 @@
 {
-  "_note": "Copy this file to watchlist.json and edit it. Groups are used by `--list` and `--fetch` (holdings, watchlist, all); peers set each ticker's Comps tab; adr_ratio is ordinary shares per US-listed share where it isn't 1; equity_risk_premium applies to every model, with optional per-ticker rates.",
+  "_note": "Copy this file to watchlist.json and edit it. Groups are used by `--list` and `--fetch` (holdings, watchlist, all); peers set each ticker's Comps tab; adr_ratio is ordinary shares per US-listed share where it isn't 1; equity_risk_premium applies to every model, with optional per-ticker rates. default_parts sets what new workbooks include: \"all\", \"statements\", or a list from dcf, multiples, comps, revenue_build.",
+  "default_parts": "all",
   "holdings": [
     "AAPL",
     "MSFT",
@@ -68,5 +69,15 @@
       "BN": 0.0423
     },
     "_note": "default applies to every model; by_ticker overrides it (Taiwan 5.01%; Netherlands, Luxembourg/Sweden and Canada 4.23%). Update when a new table is published: https://pages.stern.nyu.edu/~adamodar/New_Home_Page/datafile/ctryprem.html"
-  }
+  },
+  "brand_colors": {
+    "_note": "Accent colour per ticker (hex) for the workbook's title bars, headings and charts. Starting points from memory: correct any. Tickers without one use navy; set use_brand_colors to false to turn them off.",
+    "MSFT": "0078D4",
+    "COST": "005DAA",
+    "KO": "F40009",
+    "NVDA": "76B900",
+    "JNJ": "D51900",
+    "ASML": "10069F"
+  },
+  "use_brand_colors": true
 }

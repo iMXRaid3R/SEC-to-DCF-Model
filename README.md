@@ -3,8 +3,9 @@
 [![tests](https://github.com/iMXRaid3R/SEC-to-DCF-Model/actions/workflows/tests.yml/badge.svg)](https://github.com/iMXRaid3R/SEC-to-DCF-Model/actions/workflows/tests.yml)
 
 Builds an Excel valuation model for a public company from its SEC filings: three linked statements, a ten-year
-forecast, a DCF, comparable companies and a one-page summary. One command per company, and a roll-up across
-a portfolio.
+forecast, a DCF, forward multiples (P/E, PEG, EV/EBITDA, EV/Sales, price / free cash flow), comparable companies
+and a one-page summary. Build all of it or only the parts you want. One command per company, and a roll-up
+across a portfolio.
 
 The data comes from the SEC's free XBRL "company facts" API. Prices, exchange rates and betas are live Excel
 formulas (`STOCKHISTORY`), so the workbooks need Microsoft 365.
@@ -30,13 +31,37 @@ The screenshots show Apple built with default settings, not a view on the stock.
 On a Mac or Linux, run `chmod +x run` once, then use `./run`. Building workbooks works there; `--rollup` and
 `--writeup` read values through Excel on Windows, so they are Windows-only.
 
+## The menu
+
+Run `./run` (or `run`, or double-click `run.bat`) with nothing after it for a menu: build a company and pick
+its parts, build a watchlist group, roll up the portfolio, write a one-page summary, or see what changed. Each
+choice prints the command it runs, so you can type it directly next time.
+
+## Choosing what to build
+
+The three linked statements, with the Drivers, Inputs and Checks tabs, are always built. The rest is optional:
+
+| Part | Tab | Switch it off with |
+|---|---|---|
+| DCF | DCF: WACC, two terminal values, sensitivity grids, reverse DCF | `--no-dcf` |
+| Multiples | Multiples: forward P/E, PEG, EV/EBITDA, EV/Sales, price / free cash flow | `--no-multiples` |
+| Comps | Comps: peers' multiples (needs peers in `watchlist.json` or `--peers`) | `--no-comps` |
+| Revenue Build | Revenue Build: segment-by-segment revenue | `--no-revenue-build` |
+
+`--statements-only` builds just the three statements; `--parts dcf,multiples` names exactly what you want, and
+`--parts all` turns everything back on. A workbook remembers its parts, so a plain rebuild keeps them. Set
+`"default_parts"` in `watchlist.json` (e.g. `"dcf,multiples"`) to change what new workbooks get. Inputs you
+typed on a tab you switch off are kept in the workbook and return when you switch it back on.
+
 ## Everyday commands
 
 Run these from the project folder. In Git Bash use `./run`; in cmd or PowerShell use `run`.
 
 | Command | What it does |
 |---|---|
-| `./run ISRG` | Build or rebuild `ISRG_financials.xlsx` |
+| `./run` | The menu |
+| `./run ISRG` | Build or rebuild `ISRG_financials.xlsx` (add `--open` to open it in Excel afterwards) |
+| `./run ISRG --statements-only` | Just the three linked statements |
 | `./run --list holdings` | Build every ticker in a `watchlist.json` group (`holdings`, `watchlist`, `all`) |
 | `./run --rollup` | Read every built workbook through Excel and write `Portfolio.xlsx` and `valuation_log.csv` |
 | `./run --rollup --base-only` | Same, Base scenario only (about a third of the time) |
@@ -47,7 +72,7 @@ Run these from the project folder. In Git Bash use `./run`; in cmd or PowerShell
 | `./run --fetch all` | Download data only, build nothing |
 | `./run --comps ISRG SYK MDT` | Standalone comparables table |
 
-Other options: `--peers T1 T2`, `--no-peers`, `--years N`, `--forecast-years N`, `--template financial`,
+Other options: `--peers T1 T2`, `--parts LIST`, `--no-dcf`, `--no-multiples`, `--no-comps`, `--no-revenue-build`, `--years N`, `--forecast-years N`, `--template financial`,
 `--offline`, `--refresh`, `--fresh`. Run `./run --help` for the full list.
 
 Close a workbook in Excel before rebuilding it.
@@ -66,18 +91,73 @@ The SEC's data updates when the 10-Q or 10-K is filed, which can be days or week
 
 | Tab | Purpose |
 |---|---|
-| Summary | Price, value per share by method with ranges, what the price implies, key figures |
-| Inputs | Every setting: scenario, price and currency, dilution, discount rate, terminal value, method choices |
+| Summary | A one-screen dashboard: headline cards (price, price target, upside, 12-month target, scenario, checks), snapshot, valuation inputs and FCF yield panels, value per share by method with your weights, the football-field and revenue-and-margin charts, your thesis from Notes, what the price implies, today's multiples, key figures |
+| Inputs | Scenario, price and currency, dilution and beta are set here; every other setting is listed with a link to the tab where it is typed |
 | Drivers | Yearly growth and margin paths, and the Bear / Base / Bull table that sets them |
 | Revenue Build | Optional segment build that replaces the single revenue growth driver |
-| Income Statement, Balance Sheet, Cash Flow | Five years of history, LTM, year to date, ten forecast years |
-| DCF | Free cash flow, two terminal-value methods, sensitivity grids, reverse DCF |
+| Income Statement, Balance Sheet, Cash Flow | Five years of history, LTM, year to date, ten forecast years; subtotals ruled, and growth and margins in grey under the income statement's key lines |
+| WACC | The discount rate: risk-free rate, equity risk premium and beta (measured from prices, with its window), cost of debt with last year's interest / debt for reference, market-value weights, and the WACC |
+| DCF | Results first, then its settings (terminal growth, exit multiple, method choices) and the bridge to equity, free cash flow, two terminal-value methods, the two sensitivity grids side by side, reverse DCF |
+| Multiples | Next-twelve-months EPS, EBITDA, revenue and free cash flow; a target multiple with a low-high range for each method, and an On / Off switch. Beside each: today's price on your forecast (next twelve months), today's price on reported results (last twelve months) and the peer median, which is also trailing, so the last two compare like with like |
 | Comps | Peers, their multiples, and the value they imply |
-| Checks & Metrics | Balance checks and ratios |
+| Checks & Metrics | Balance checks with a green tick or red cross each, and ratios |
 | Notes | Your thesis and sources (column A is kept across rebuilds) |
 | Mapping, Raw | Which filing tag fed each number |
 
-Colours: blue is an input, black a formula, green a link to another tab.
+**Inputs sit next to what they change.** The discount-rate settings are on the WACC tab, the DCF's own at the top
+of the DCF tab, multiple
+targets on the Multiples tab, scenario drivers on Drivers and the price-target weights on the Summary. The
+Inputs tab lists every setting with its current value: click a blue underlined name to jump to it. The top
+row of every tab with inputs shows the scenario, price target and upside, and the DCF and multiples values,
+so you see the effect of a change where you make it. On the Summary, click a method's name to go to its main
+input. Each number is typed in one place only, so two copies can never disagree.
+
+**Overrides never delete a formula.** Wherever the model suggests a value, the suggestion stays in its own
+cell and you type yours in a yellow override cell beside it; clear yours to go back. The model uses yours when
+there is one:
+
+| Where | Default | Your override |
+|---|---|---|
+| DCF settings | Default column (e.g. beta from prices, exit multiple from peers) | Your override column |
+| Multiples | Default target (peer median or a set multiple) | Your target; Range +/- sets Low / High |
+| Drivers, Bear / Base / Bull | Scenario inputs (defaults) table | Your overrides table below it, same layout |
+| Drivers, single years | The scenario path in the rows at the top | Your overrides by year (that year is shaded orange at the top) |
+| Revenue Build | Segment growth = Drivers revenue growth | Your growth overrides |
+| Summary | Return to roll the target forward (grey) | The yellow cell next to it |
+| Inputs | Shares outstanding from the filings | Shares outstanding override |
+
+**Look.** Every tab has a title bar in the company's colour, no gridlines, and long explanations as hover
+notes (cells with a red corner). The colour comes from `"brand_colors"` in `watchlist.json` (hex, e.g.
+`"META": "0064E0"`); companies without one use navy, and `"use_brand_colors": false` turns it off. Colours too
+light for white text, or flat black, are adjusted automatically. Only the frame takes the brand colour: the
+colours that mean something stay fixed.
+
+Colours: **yellow cells are inputs** - anything with a yellow fill is safe to change and is kept when the
+workbook is rebuilt. Everything else is calculated: blue type is data from the filings, black a formula, green a
+link to another tab. No yellow cell holds a formula, so typing in one can't break anything.
+
+## Price target
+
+The Summary tab has a **Weight** column next to each valuation method. The weighted blend is the **price
+target**, shown as a gold bar on the chart, with a low-high range from the methods' own ranges. Methods with no
+value (switched off, not built, or negative earnings) are left out and the other weights scaled back to 100%.
+
+| Method | Default weight |
+|---|---|
+| DCF: perpetuity growth | 30% |
+| DCF: exit multiple | 25% |
+| Forward P/E, Forward EV/EBITDA | 20% each |
+| PEG | 5% |
+| Forward EV/Sales, Price / free cash flow, Peer multiples | 0% |
+
+Price / free cash flow is left out by default: at its default multiple, 1 / (WACC - growth), it is a one-stage
+DCF and would count the DCF twice. The Summary shows the free-cash-flow yield instead (FCF / market cap) on
+reported results, on your forecast, and after stock-based compensation, next to the Treasury yield and the
+cost of equity.
+
+The **12-month price target** rolls the target forward a year at the cost of equity less the dividend yield
+(type your own return in the yellow cell below it). The roll-up and write-up report the target for each
+scenario and a probability-weighted target across Bear, Base and Bull.
 
 ## Things worth knowing
 
@@ -87,6 +167,9 @@ Colours: blue is an input, black a formula, green a link to another tab.
   time; the roll-up reads all three and applies the probabilities set on Inputs.
 - **Year one uses reported results.** When a 10-Q is newer than the last 10-K, the first forecast year is the
   months already reported plus a forecast for the rest.
+- **PEG.** The fair P/E is the target PEG (default 1.0) times the forecast's yearly EPS growth in percent, over
+  a window you set on the Multiples tab (default five years). It is blank when EPS or its growth isn't positive.
+  Peer medians on the Comps tab are trailing multiples, so as targets for forward figures they lean generous.
 - **Valued as of today.** The elapsed part of year one is excluded and net debt comes from the latest balance sheet.
 - **Defaults are conventions, not views.** Risk-free rate: the current 10-year Treasury yield. Equity risk
   premium: set in `watchlist.json` (currently Damodaran's January 2026 figures). Beta: five-year monthly against
@@ -128,6 +211,10 @@ edgar/mapping.py    line item -> XBRL tags (US GAAP and IFRS)
 edgar/transform.py  filings -> annual, LTM and year-to-date values
 edgar/layout.py     every row of every sheet and its formulas
 edgar/xl_*.py       sheet writers (model, inputs, DCF, summary, revenue build)
+edgar/xl_multiples.py  the Multiples tab
+edgar/xl_wacc.py    the WACC tab
+edgar/parts.py      which optional parts a build includes
+edgar/menu.py       the menu shown by ./run with no arguments
 edgar/xl_fin.py     the financials template (banks, insurers)
 edgar/comps.py      comparables
 edgar/inputs.py     keeps typed inputs across rebuilds

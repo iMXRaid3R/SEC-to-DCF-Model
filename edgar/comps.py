@@ -1,4 +1,5 @@
-"""Comps: one row of LTM (or latest FY) operating metrics per ticker, plus price-driven multiples."""
+"""Comps: LTM (or latest FY) operating metrics per company, plus price-driven multiples. The tab is tall: one
+row per metric and one column per company, then the peer median and mean."""
 import time
 
 from openpyxl import Workbook
@@ -123,100 +124,159 @@ def build_comps(tickers, email, refresh=False):
     return wb
 
 
+# The tab is tall: one row per metric, grouped, and one column per company, then the peer median and mean.
+SECTIONS = [
+    ("Company", ["Ticker", "Company", "Period", "Ccy"]),
+    ("Operations", ["Revenue", "Rev growth", "Gross margin", "EBIT margin", "EBITDA margin", "Net margin",
+                    "FCF margin", "ROIC"]),
+    ("Earnings, debt and shares", ["EBITDA", "Net income", "Net debt", "NCI", "Shares (M)", "Ord / listed sh"]),
+    ("Price and value", ["Live close", "Price date", "Price override", "Share price", "FX per USD", "Market cap",
+                         "Enterprise value"]),
+    ("Multiples", ["EV / Revenue", "EV / EBITDA", "P / E"]),
+]
+FIRST_COL = 2                                   # column B: the first company (the subject in a model workbook)
+
+
 def write_comps(rows, ws, subject=None, price_ref=None, reg=None):
-    """rows: list of _metrics() dicts. In a model workbook, `subject` is the company's own row: it is listed
-    first, takes its share price from `price_ref` (the Assumptions tab), is left out of the peer median/mean,
-    and gets an implied-value block from the peer medians. Returns {multiple header: median cell reference}."""
+    """rows: list of _metrics() dicts. In a model workbook, `subject` is the company's own column: it comes
+    first, takes its share price from `price_ref` (the Inputs tab), is left out of the peer median/mean, and
+    gets an implied-value block from the peer medians. Returns {multiple header: median cell reference}."""
     if subject:
         rows = [subject] + rows
     ws.title = "Comps"
     ws["A1"], ws["A1"].font = ("Comparable Companies" if not subject
                                else f"{subject['Company']} ({subject['Key']}) - Comparable Companies"), st.TITLE_FONT
-    ws["A2"] = ("Prices are the latest close from Excel's STOCKHISTORY (Microsoft 365); type in the yellow column to "
-                "override. Flows are LTM where a newer 10-Q exists, else the latest fiscal year. Millions, in "
-                "each company's reporting currency (Ccy); prices are converted with the FX column.")
+    ws["A2"] = ("One column per company. Prices are the latest close from Excel's STOCKHISTORY (Microsoft 365); "
+                "type in the yellow Price override row to replace one. Flows are LTM where a newer 10-Q exists, else "
+                "the latest fiscal year; millions, in each company's reporting currency (Ccy), with prices converted "
+                "by the FX row.")
     ws["A2"].font = st.NOTE_FONT
+    fmt_of = {h: f for h, _, f, _ in VALUE_COLS}
+    fmt_of.update({h: f for h, _, f in CALC_COLS})
+    key_of = {h: k for h, k, _, _ in VALUE_COLS}
+    tpl_of = {h: t for h, t, _ in CALC_COLS}
 
-    headers = [h for h, *_ in VALUE_COLS] + [h for h, *_ in CALC_COLS] + [NOTES_COL]
-    letter = {h: get_column_letter(i + 1) for i, h in enumerate(headers)}
-    for i, h in enumerate(headers, start=1):
-        st.header_cell(ws.cell(row=4, column=i), h, "fcst" if len(VALUE_COLS) < i < len(headers) else "label")
-    first, last = 5, 4 + len(rows)
-    for r, row in enumerate(rows, start=first):
-        for i, (h, key, fmt, _) in enumerate(VALUE_COLS, start=1):
-            c = ws.cell(row=r, column=i, value=row[key])
-            if subject and r == first and h == "Ord / listed sh":
-                c.value = 1                     # the subject's price is already per ordinary share (Assumptions tab)
-            if fmt:
-                c.number_format, c.font = ("General" if fmt == "ratio" else st.FMT[fmt]), st.font(st.BLUE)
-        for h, tpl, fmt in CALC_COLS:
-            c = ws.cell(row=r, column=headers.index(h) + 1)
-            c.number_format = st.FMT[fmt]
-            if subject and r == first and h == "Share price":
-                c.value, c.number_format = f"={price_ref}", st.FMT["price"]
-                c.font = st.formula_font(c.value)
-            elif subject and r == first and h == "FX per USD":
-                c.value = 1                     # ... and already in the reporting currency
-            elif tpl is None:
-                c.fill, c.font = st.INPUT_FILL, st.font(st.BLUE)
-                if reg is not None and not (subject and r == first):
-                    reg.add(ws, c, "Comps", row["Key"], h)
-            else:
-                c.value = tpl.format(**{k: f"{v}{r}" for k, v in letter.items()})
-                c.font = st.formula_font(c.value)
-        ws.cell(row=r, column=len(headers), value=row["Notes"]).font = st.NOTE_FONT
+    # rows of the tab
+    hdr = 4
+    row_of, r, section_rows = {}, hdr + 1, []
+    for title, heads in SECTIONS:
+        section_rows.append((r, title))
+        r += 1
+        for h in heads:
+            row_of[h] = r
+            r += 1
+        r += 1
+    notes_row = r - 1
+    cols = [get_column_letter(FIRST_COL + i) for i in range(len(rows))]
+    med_col, mean_col = get_column_letter(FIRST_COL + len(rows)), get_column_letter(FIRST_COL + len(rows) + 1)
+    peers = cols[1:] if subject else cols                # the subject is not its own comparable
+    last_col = FIRST_COL + len(rows) + 1
 
-    p_first = first + 1 if subject else first           # peers only: the subject is not its own comparable
-    if subject:
-        for i in (1, 2):
-            ws.cell(row=first, column=i).font = st.font(bold=True)
-    medians = {}
-    for k, (label, fn) in enumerate((("Peer median" if subject else "Median", "MEDIAN"),
-                                     ("Peer mean" if subject else "Mean", "AVERAGE")), start=last + 2):
-        ws.cell(row=k, column=1, value=label).font = st.font(bold=True)
-        for i, h in enumerate(headers, start=1):
-            fmt = next((f for hh, _, f, *_ in VALUE_COLS if hh == h), None) or next(
-                (f for hh, _, f in CALC_COLS if hh == h), None)
-            if fmt in ("pct", "x") and last >= p_first:
-                c = ws.cell(row=k, column=i, value=f'=IFERROR({fn}({letter[h]}{p_first}:{letter[h]}{last}),"")')
+    # header row: tickers, then median and mean
+    st.header_cell(ws.cell(row=hdr, column=1), "")
+    for i, (col, row) in enumerate(zip(cols, rows)):
+        st.header_cell(ws[f"{col}{hdr}"], row["Key"], "ltm" if subject and i == 0 else "fcst")
+    for col, label in ((med_col, "Peer median" if subject else "Median"), (mean_col, "Peer mean" if subject else "Mean")):
+        st.header_cell(ws[f"{col}{hdr}"], label, "label")
+    for sr, title in section_rows:
+        st.section(ws, sr, 1, last_col, title, size=11)
+
+    for h, rr in row_of.items():
+        a = ws.cell(row=rr, column=1, value=h)
+        a.alignment = st.Alignment(indent=1)
+        fmt = fmt_of.get(h)
+        for i, (col, row) in enumerate(zip(cols, rows)):
+            c = ws[f"{col}{rr}"]
+            is_subject = bool(subject) and i == 0
+            if h in key_of:                                         # a figure from the filings
+                c.value = row[key_of[h]]
+                if is_subject and h == "Ord / listed sh":
+                    c.value = 1                 # the subject's price is already per ordinary share (Inputs tab)
+                if fmt:
+                    c.number_format, c.font = ("General" if fmt == "ratio" else st.FMT[fmt]), st.font(st.BLUE)
+                if h == "Company":
+                    c.alignment = st.Alignment(wrap_text=True, vertical="top")
+                    c.font = st.font(bold=True)
+            else:                                                   # price-driven
+                c.number_format = st.FMT[fmt]
+                tpl = tpl_of[h]
+                if is_subject and h == "Share price":
+                    c.value, c.number_format = f"={price_ref}", st.FMT["price"]
+                    c.font = st.formula_font(c.value)
+                elif is_subject and h == "FX per USD":
+                    c.value = 1                 # ... and already in the reporting currency
+                elif tpl is None:                                   # the price override
+                    if not is_subject:
+                        c.fill, c.font = st.INPUT_FILL, st.font(st.BLUE)
+                        if reg is not None:
+                            reg.add(ws, c, "Comps", row["Key"], h)
+                else:
+                    c.value = tpl.format(**{k: f"{col}{v}" for k, v in row_of.items()})
+                    c.font = st.formula_font(c.value)
+            if h != "Company":
+                c.alignment = st.Alignment(horizontal="right")
+        if fmt in ("pct", "x") and peers:                           # peer median and mean of ratios
+            rng = f"{peers[0]}{rr}:{peers[-1]}{rr}"
+            for col, fn in ((med_col, "MEDIAN"), (mean_col, "AVERAGE")):
+                c = ws[f"{col}{rr}"]
+                c.value = f'=IFERROR({fn}({rng}),"")'
                 c.number_format, c.font = st.FMT[fmt], st.font(bold=True)
-                if fn == "MEDIAN":
-                    medians[h] = f"Comps!${letter[h]}${k}"
-    note_row = last + 5
-    if subject and last >= p_first:
-        note_row = _implied_block(ws, last + 5, first, last + 2, letter) + 2
-        medians["_implied"] = f"Comps!$F${last + 7}:$F${last + 9}"     # the three implied values per share
+                c.fill = st.PatternFill("solid", fgColor=st.THEME["pale"])
+    ws.row_dimensions[row_of["Company"]].height = 30
+    if subject:
+        for rr in row_of.values():
+            ws[f"{cols[0]}{rr}"].fill = st.PatternFill("solid", fgColor="F3F4F6")    # the subject, set apart
+    st.row_rules(ws, list(row_of.values()), last_col)
+    # notes (e.g. "EBITDA uses last-FY D&A") under each company
+    ws.cell(row=notes_row, column=1, value="Notes").alignment = st.Alignment(indent=1)
+    for col, row in zip(cols, rows):
+        c = ws[f"{col}{notes_row}"]
+        c.value, c.font, c.alignment = row["Notes"] or None, st.NOTE_FONT, st.Alignment(wrap_text=True, vertical="top")
 
-    widths = [w for *_, w in VALUE_COLS] + [13] * len(CALC_COLS) + [30]
-    for i, w in enumerate(widths, start=1):
-        ws.column_dimensions[get_column_letter(i)].width = w
-    ws.freeze_panes = "D5"
-    ws.cell(row=note_row, column=1, value="If a live close is blank or wrong, check the exchange prefix on the ticker "
-                                          "(XNAS: Nasdaq, XNYS: NYSE) or use the override column.").font = st.NOTE_FONT
+    medians = {h: f"Comps!${med_col}${row_of[h]}" for h in ("EV / Revenue", "EV / EBITDA", "P / E", "Rev growth",
+                                                             "Gross margin", "EBIT margin", "EBITDA margin",
+                                                             "Net margin", "FCF margin", "ROIC")} if peers else {}
+    after = notes_row + 2
+    if subject and peers:
+        top = after
+        end = _implied_block(ws, top, cols[0], med_col, row_of)
+        medians["_implied"] = f"Comps!$F${top + 2}:$F${top + 4}"    # the three implied values per share
+        after = end + 2
+    ws.cell(row=after, column=1, value="If a live close is blank or wrong, check the exchange prefix on the ticker "
+                                       "(XNAS: Nasdaq, XNYS: NYSE) or type the price in the Price override row."
+            ).font = st.NOTE_FONT
+    ws.column_dimensions["A"].width = 26
+    for i in range(len(rows) + 2):
+        ws.column_dimensions[get_column_letter(FIRST_COL + i)].width = 15
+    for L in "FG":                                                  # the implied block's wider columns
+        ws.column_dimensions[L].width = max(ws.column_dimensions[L].width or 0, 15)
+    ws.freeze_panes = f"B{hdr + 1}"
     return medians
 
 
-def _implied_block(ws, top, subj, med, letter):
-    """What the subject would be worth at the peer median multiples. Returns the last row used."""
-    L = lambda h, r: f"${letter[h]}${r}"
-    ws.cell(row=top, column=1, value="Implied value at peer median multiples").font = st.font(bold=True)
+def _implied_block(ws, top, subj, med, row_of):
+    """What the subject would be worth at the peer median multiples. Returns the last row used.
+    subj / med: the subject's and the peer median's column letters."""
+    L = lambda col, h: f"${col}${row_of[h]}"
+    st.section(ws, top, 1, 7, "Implied value at peer median multiples", size=11)
     heads = ["Multiple", "Peer median", "Company metric", "Implied EV", "Implied equity", "Per share", "vs. price"]
     for i, h in enumerate(heads):
         st.header_cell(ws.cell(row=top + 1, column=1 + i), h, "fcst" if i else "label")
-    bridge = f"-{L('Net debt', subj)}-{L('NCI', subj)}"
+    bridge = f"-{L(subj, 'Net debt')}-{L(subj, 'NCI')}"
     lines = [("EV / EBITDA", "EBITDA", True), ("EV / Revenue", "Revenue", True), ("P / E", "Net income", False)]
     for k, (mult, metric, is_ev) in enumerate(lines):
         r = top + 2 + k
-        ws.cell(row=r, column=1, value=mult)
-        base = f"{L(mult, med)}*{L(metric, subj)}"
-        cells = [(f"={L(mult, med)}", "x"), (f"={L(metric, subj)}", "usd"),
+        ws.cell(row=r, column=1, value=mult).alignment = st.Alignment(indent=1)
+        base = f"{L(med, mult)}*{L(subj, metric)}"
+        cells = [(f"={L(med, mult)}", "x"), (f"={L(subj, metric)}", "usd"),
                  (f'=IFERROR({base},"")' if is_ev else None, "usd"),
                  (f'=IFERROR({base}{bridge if is_ev else ""},"")', "usd"),
-                 (f'=IFERROR(E{r}/{L("Shares (M)", subj)},"")', "price"),
-                 (f'=IFERROR(F{r}/{L("Share price", subj)}-1,"")', "pct")]
+                 (f'=IFERROR(E{r}/{L(subj, "Shares (M)")},"")', "price"),
+                 (f'=IFERROR(F{r}/{L(subj, "Share price")}-1,"")', "pct")]
         for i, (f, fmt) in enumerate(cells, start=2):
             c = ws.cell(row=r, column=i, value=f)
             c.number_format = st.FMT[fmt]
             if f:
                 c.font = st.formula_font(f)
+    st.row_rules(ws, [top + 2 + k for k in range(len(lines))], 7)
     return top + 1 + len(lines)

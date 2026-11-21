@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """
 edgar_etl.py - Build a financial model workbook from SEC EDGAR (XBRL "company facts"):
-Assumptions (drivers + Bear/Base/Bull scenarios), Revenue Build, Income Statement, Balance Sheet, Cash Flow
-(historicals + LTM + linked forecast), DCF, Comps (when peers are given), Checks & Metrics, Mapping, and Raw.
+Drivers (Bear/Base/Bull scenarios), Income Statement, Balance Sheet, Cash Flow (historicals + LTM + linked
+forecast), Checks & Metrics, Mapping and Raw - plus, optionally, DCF, Multiples (P/E, PEG, EV/EBITDA, EV/Sales,
+P/FCF), Comps and Revenue Build.
 
 Usage:
+    python edgar_etl.py                                      # the menu
+    python edgar_etl.py ISRG --statements-only               # just the three linked statements
+    python edgar_etl.py ISRG --no-dcf --no-revenue-build     # leave parts out (remembered on rebuild)
     pip install requests pandas openpyxl        (or prefix commands with: uv run --with requests --with pandas --with openpyxl)
     python edgar_etl.py ISRG                                 # peers come from watchlist.json when listed there
     python edgar_etl.py ISRG --peers SYK MDT BSX             # choose the peers for the Comps tab
@@ -33,6 +37,7 @@ import time
 from datetime import date
 from pathlib import Path
 
+from edgar import parts as parts_mod
 from edgar import sec
 from edgar.comps import build_comps, peer_rows
 from edgar.inputs import backup, carry_over
@@ -100,6 +105,7 @@ def build_one(a, ticker, peers, out=None, quiet=False):
         print(f"Comparing {Path(a.since).name} with today's SEC data (nothing is built or saved):")
         return report_changes(fin, a.since)
     fin.adr_ratio = a.adr.get(ticker, 1)
+    fin.brand = a.brands.get(ticker) if a.use_brand else None
     erp = a.erp.get("by_ticker", {}).get(ticker, a.erp.get("default"))
     if erp:
         own = ticker in a.erp.get("by_ticker", {})
@@ -114,24 +120,42 @@ def build_one(a, ticker, peers, out=None, quiet=False):
     if fin.currency != "USD":
         print(f"Reports in {fin.currency} ({fin.annual_form}): the workbook converts the dollar share price; "
               f"ordinary shares per US-listed share = {fin.adr_ratio:g} (watchlist.json \"adr_ratio\")")
-    rows = peer_rows(peers, a.email, a.refresh, skip={ticker}, adr=a.adr) if peers else []
+    out = Path(out or f"{ticker}_financials.xlsx")
+    remembered = parts_mod.previous(out) if out.exists() and not a.fresh else None
+    parts = parts_mod.resolve(a.parts, a.off, remembered, a.default_parts)
+    if "comps" in parts and not peers:
+        parts.discard("comps")
+        if a.parts is not None and "comps" in a.parts:
+            print(f"  ! No peers for {ticker}: add them under \"peers\" in watchlist.json or use --peers, for a Comps tab")
+    rows = peer_rows(peers, a.email, a.refresh, skip={ticker}, adr=a.adr) if peers and "comps" in parts else []
     template = a.template or a.templates.get(ticker)
-    wb, model = build_workbook(fin, a.forecast_years, rows, template)
+    wb, model = build_workbook(fin, a.forecast_years, rows, template, parts)
     if model.kind == "fin":
         print("Financial company: built with the financials template (valued on equity, not free cash flow). "
               "Use --template standard to force the standard model.")
-    out = Path(out or f"{ticker}_financials.xlsx")
+        if a.parts is not None or a.off:
+            print("  (--parts and the --no- switches apply to the standard model only)")
+    else:
+        how = ("as last time" if remembered is not None and parts == remembered and a.parts is None and not a.off
+               else "")
+        print(f"Parts: {parts_mod.describe(parts)}" + (f" ({how}; change with --parts)" if how else ""))
     if out.exists() and not a.fresh:
-        kept, dropped = carry_over(out, wb, model.reg, a.reset or ())
+        kept, dropped, parked = carry_over(out, wb, model.reg, a.reset or ())
         if kept:
             print(f"Kept {len(kept)} of your inputs from the existing {out.name}:")
             for k, v in kept:
                 print(f"    {k.replace('|', ' > ')} = {_show(v)}")
         for k, why in dropped:
             print(f"  ! not carried over: {k.replace('|', ' > ')} - {why}")
+        if parked:
+            tabs = sorted({k.split("|")[0] for k, _ in parked})
+            print(f"Kept {len(parked)} input(s) from tabs not in this build ({', '.join(tabs)}): they come back "
+                  "when you build with those parts again.")
     saved = backup(out)
     wb.save(out)
     print(f"Saved {out}" + (f"   (previous version: backups/{saved.name})" if saved else ""))
+    if a.open:
+        open_file(out)
     changed = report_changes(fin, saved, out.resolve().parent) if saved else None
     if model.kind == "fin":
         if not quiet:
@@ -191,7 +215,29 @@ def setup(a):
           "Then:        ./run --list holdings   and   ./run --rollup")
 
 
-def main():
+def _parts_arg(text):
+    try:
+        return parts_mod.parse(text)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e))
+
+
+def open_file(path):
+    """Open a workbook in Excel (or whatever opens .xlsx files here)."""
+    import os
+    import subprocess
+    try:
+        if sys.platform.startswith("win"):
+            os.startfile(str(Path(path).resolve()))           # noqa: the Windows-only call
+        elif sys.platform == "darwin":
+            subprocess.run(["open", str(path)], check=False)
+        else:
+            subprocess.run(["xdg-open", str(path)], check=False)
+    except Exception as e:
+        print(f"  (could not open {path}: {e})")
+
+
+def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("ticker", nargs="?", help="Ticker, e.g. AAPL")
     p.add_argument("--email", default=DEFAULT_EMAIL,
@@ -204,7 +250,18 @@ def main():
     p.add_argument("--offline", action="store_true", help="Use ./cache whatever its age; never call sec.gov")
     p.add_argument("--peers", nargs="+", metavar="TICKER",
                    help="Peers for the Comps tab (default: this ticker's list in watchlist.json)")
-    p.add_argument("--no-peers", action="store_true", help="Skip the Comps tab")
+    p.add_argument("--parts", type=_parts_arg, metavar="LIST",
+                   help="Which parts to build besides the three statements: comma-separated from dcf, multiples, "
+                        "comps, revenue_build - or 'all', or 'statements' for the three statements only. Default: "
+                        "what the workbook was built with last time, else \"default_parts\" in watchlist.json, else all")
+    p.add_argument("--statements-only", dest="parts", action="store_const", const=set(),
+                   help="Only the three linked statements (with Drivers, Inputs and Checks): no valuation tabs")
+    for part, text in (("dcf", "the DCF tab"), ("multiples", "the Multiples tab (P/E, PEG, EV/EBITDA, ...)"),
+                       ("comps", "the Comps tab"), ("revenue-build", "the Revenue Build tab")):
+        p.add_argument(f"--no-{part}", dest="off", action="append_const", const=part.replace("-", "_"),
+                       help=f"Leave out {text}")
+    p.add_argument("--no-peers", dest="off", action="append_const", const="comps", help="Same as --no-comps")
+    p.add_argument("--open", action="store_true", help="Open the workbook in Excel when it is built")
     p.add_argument("--template", choices=("standard", "financial"),
                    help="Which model to build. Default: financial for banks and insurers (detected from the "
                         "filings) or tickers listed under \"template\" in watchlist.json, otherwise standard")
@@ -234,7 +291,11 @@ def main():
     p.add_argument("--fetch", nargs="+", metavar="TICKER_OR_GROUP",
                    help="Only download SEC data into ./cache for these tickers or watchlist.json groups "
                         "(holdings, watchlist, all) and their peers; builds nothing")
-    a = p.parse_args()
+    if argv is None and len(sys.argv) == 1:
+        from edgar.menu import menu
+        main.open_file = open_file
+        return menu(main)
+    a = p.parse_args(argv)
     if a.forecast_years < 3:
         p.error("--forecast-years must be at least 3")
     if a.setup:
@@ -244,11 +305,19 @@ def main():
     peer_map = {k.upper(): v for k, v in wl.get("peers", {}).items()}
     a.adr = {k.upper(): v for k, v in wl.get("adr_ratio", {}).items()}
     a.templates = {k.upper(): v for k, v in wl.get("template", {}).items()}
+    a.off = a.off or []
+    dp = wl.get("default_parts")
+    try:
+        a.default_parts = None if dp is None else parts_mod.parse(dp if isinstance(dp, str) else ",".join(dp))
+    except ValueError as e:
+        p.error(f'watchlist.json "default_parts": {e}')
     a.erp = dict(wl.get("equity_risk_premium", {}))
+    a.brands = {k.upper(): v for k, v in wl.get("brand_colors", {}).items() if not k.startswith("_")}
+    a.use_brand = wl.get("use_brand_colors", True) is not False
     a.erp["by_ticker"] = {k.upper(): v for k, v in a.erp.get("by_ticker", {}).items()}
 
     def peers_for(ticker):
-        if a.no_peers:
+        if "comps" in a.off:
             return []
         return a.peers or peer_map.get((ticker or "").upper(), [])
 

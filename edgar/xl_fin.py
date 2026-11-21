@@ -63,6 +63,10 @@ def build_financial(fin, n_fcst=10):
     for name, color in (("Summary", "1F3864"), ("Inputs", "BF8F00"), (SHEET, "7030A0"), ("Notes", "808080"),
                         ("Mapping", "808080"), ("Raw", "808080")):
         wb[name].sheet_properties.tabColor = color
+    for ws in wb.worksheets:                                # the house style: title bars, no gridlines
+        if ws.title not in ("Mapping", "Raw"):
+            st.title_bar(ws)
+    wb["Summary"].sheet_properties.tabColor = st.THEME["accent"]
     m.reg.write(wb)
     wb.active = 0
     return wb, m
@@ -77,8 +81,8 @@ def _model(ws, m, write_header):
     g, fin = m.grid, m.fin
     write_header(ws, g, f"{fin.name} ({fin.ticker}) - {SHEET}",
                  "Financial companies are valued on equity: forecast = return on equity and payout; value = book "
-                 "equity plus the present value of returns above the cost of equity. Blue = SEC filings or inputs, "
-                 "black = formula. Settings are on the Inputs tab.")
+                 "equity plus the present value of returns above the cost of equity. Blue = SEC filings, black = "
+                 "formula; yellow = inputs you can change. Settings are on the Inputs tab.")
     R = ROW
     r_of = lambda label, col: f"{col.L}{R[label]}"
     last, n = g.last_fy, len(g.fcst)
@@ -136,7 +140,7 @@ def _model(ws, m, write_header):
                 c.value = (f"={y1}" if k == 1 else f"={y1}+({ym}-{y1})*{k - 1}/{mid - 1}" if k <= mid
                            else f"={ym}+({yn}-{ym})*{k - mid}/{n - mid}")
                 c.fill = st.FCST_BG
-                m.reg.add(ws, c, "Live", label, col.header)
+                m.reg.add(ws, c, "Live", label, col.header, mark=False)
                 continue
             if col.kind == "fcst":
                 c.fill = st.FCST_BG
@@ -171,7 +175,7 @@ def _model(ws, m, write_header):
     ws.cell(row=t, column=2, value="Each driver runs in straight lines from year 1 to the mid-point to the final year. "
                                    "Base year 1 comes from history; return on equity fades halfway back to the cost "
                                    "of equity by the final year; Bear and Bull default to Base return on equity "
-                                   "-/+ 10%. Overwrite any blue cell.").font = st.NOTE_FONT
+                                   "-/+ 10%. Overwrite any yellow cell.").font = st.NOTE_FONT
     st.header_cell(ws.cell(row=t + 1, column=1), "")
     st.header_cell(ws.cell(row=t + 2, column=1), "Driver")
     heads = (g.fcst[0].header, g.fcst[mid - 1].header, g.fcst[-1].header)
@@ -325,7 +329,7 @@ def _grid(ws, top, title, base_ref, step, fmt, ke, formula):
             c = ws.cell(row=r, column=3 + k, value=formula(f"$B{r}", f"{get_column_letter(3 + k)}${hdr}"))
             c.number_format = st.FMT["price"]
             if o == 0 and k == 2:
-                c.fill, c.font = st.INPUT_FILL, st.font(bold=True)
+                c.fill, c.font = st.PatternFill("solid", fgColor=st.THEME["pale"]), st.font(bold=True)
 
 
 def _summary(ws, m):

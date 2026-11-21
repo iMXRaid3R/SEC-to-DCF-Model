@@ -6,10 +6,11 @@ from datetime import date, datetime
 from pathlib import Path
 
 from .layout import INPUT_ROWS, SHEET_NAMES
-from .rollup import SCENARIOS, _mid, _num, to_row
+from .xl_summary import WEIGHTS
+from .rollup import MULT_METHODS, SCENARIOS, _mid, _num, to_row
 
-BLOCKS = {"summary": ("Summary", "A1:G60"), "inputs": (SHEET_NAMES["INP"], "A1:B70"),
-          "drivers": (SHEET_NAMES["A"], "A1:M70"), "notes": ("Notes", "A1:A60")}
+BLOCKS = {"summary": ("Summary", "A1:L120"), "inputs": (SHEET_NAMES["INP"], "A1:B70"),
+          "drivers": (SHEET_NAMES["A"], "A1:M140"), "notes": ("Notes", "A1:A60")}
 KEY_DRIVERS = ("Revenue growth", "Gross margin", "R&D % of revenue", "SG&A % of revenue", "Tax rate",
                "Capex % of revenue", "Return on equity", "Dividends % of net income", "Buybacks % of net income")
 
@@ -68,9 +69,11 @@ def render(ticker, by_scenario, selected, weights, blocks, today=None):
     inp = {k: inputs[r - 1][1] for k, r in INPUT_ROWS.items() if r - 1 < len(inputs)}
     foreign = row["currency"] != "USD"
     lines = [f"# {row['company']}: valuation summary", ""]
-    side = {r[3]: r[4] for r in summary[3:11] if isinstance(r[3], str)}
+    side = {r[3]: (r[4] if r[4] is not None else r[5]) for r in summary[3:20] if len(r) > 5 and isinstance(r[3], str)}
+    pd_row = _find(summary, "Price date")
     lines.append(f"*{today:%B %d, %Y}. Share price {money(row['price'])}"
-                 f" ({_day(summary[5][1])}). Valued as of {_day(side.get('Valuation date'))}."
+                 f" ({_day(summary[pd_row][1]) if pd_row is not None else 'n/a'})."
+                 f" Valued as of {_day(side.get('Valuation date'))}."
                  + (f" The company reports in {row['currency']}; values below are converted to dollars per "
                     "US-listed share." if foreign else "") + "*")
     lines.append("")
@@ -80,18 +83,41 @@ def render(ticker, by_scenario, selected, weights, blocks, today=None):
     scen = [by_scenario.get(s, {}) for s in SCENARIOS]
     fin = bool(by_scenario.get("Base", by_scenario.get(selected, {})).get("financial"))
     names = ("Residual income", "Exit price-to-book") if fin else ("DCF: perpetuity growth", "DCF: exit multiple")
-    body = [[names[0]] + [money(s.get("perp")) for s in scen],
-            [names[1]] + [money(s.get("exit")) for s in scen],
-            ["**Midpoint of the two**"] + [f"**{money(_mid(s.get('perp'), s.get('exit')))}**" for s in scen],
-            ["vs. share price"] + [signed(_mid(s.get("perp"), s.get("exit")) / row["price"] - 1)
-                                   if row["price"] and _mid(s.get("perp"), s.get("exit")) is not None else "n/a"
-                                   for s in scen]]
-    lines.append(_table(["Method"] + list(SCENARIOS), body))
+    body = []
+    if any(s.get("perp") is not None or s.get("exit") is not None for s in scen):
+        body = [[names[0]] + [money(s.get("perp")) for s in scen],
+                [names[1]] + [money(s.get("exit")) for s in scen],
+                ["**Midpoint of the two**"] + [f"**{money(_mid(s.get('perp'), s.get('exit')))}**" for s in scen],
+                ["vs. share price"] + [signed(_mid(s.get("perp"), s.get("exit")) / row["price"] - 1)
+                                       if row["price"] and _mid(s.get("perp"), s.get("exit")) is not None else "n/a"
+                                       for s in scen]]
+    for key, label in MULT_METHODS.items():
+        if any(s.get(key) is not None for s in scen):
+            body.append([label] + [money(s.get(key)) for s in scen])
+    if body:
+        lines.append(_table(["Method"] + list(SCENARIOS), body))
+    else:
+        lines.append("*Built with the three statements only: no valuation methods in this workbook.*")
     lines.append("")
     extras = []
+    if any(s.get("target") is not None for s in scen):
+        lines.append(_table(["", *SCENARIOS], [
+            ["**Price target (weighted)**"] + [f"**{money(s.get('target'))}**" for s in scen],
+            ["vs. share price"] + [signed(s["target"] / row["price"] - 1) if row["price"] and s.get("target")
+                                   is not None else "n/a" for s in scen],
+            ["12-month price target"] + [money(s.get("target_12m")) for s in scen]]))
+        lines.append("")
+        weights = [(r[0], r[6]) for r in summary if len(r) > 6 and r[0] in WEIGHTS
+                   and _num(r[6]) is not None and r[0] != "Price target (weighted)" and r[6] > 0]
+        if weights:
+            extras.append("- Price target weights: " + ", ".join(f"{n} {pct(w, 0)}" for n, w in weights)
+                          + " (methods without a value are left out and the rest rescaled).")
+        if row["target_weighted"] is not None:
+            extras.append(f"- **Probability-weighted price target: {money(row['target_weighted'])}** "
+                          f"({signed(row['target_weighted'] / row['price'] - 1) if row['price'] else 'n/a'} vs. price).")
     if row["weighted"] is not None:
         w = ", ".join(f"{n} {pct(x, 0)}" for n, x in zip(SCENARIOS, weights))
-        extras.append(f"- **Probability-weighted value: {money(row['weighted'])}** ({signed(row['upside_weighted'])} "
+        extras.append(f"- Probability-weighted DCF midpoint: {money(row['weighted'])} ({signed(row['upside_weighted'])} "
                       f"vs. price), using {w}.")
     if row["peers"] is not None:
         extras.append(f"- Value at peer median multiples: {money(row['peers'])}.")
@@ -142,13 +168,17 @@ def render(ticker, by_scenario, selected, weights, blocks, today=None):
         lines.append(f"- Terminal growth {pct(inp.get('g'))}; exit multiple {mult} EV/EBITDA.")
         lines.append(f"- Terminal cash flow: {inp.get('tv_mode')}. Stock-based compensation: {inp.get('sbc_mode')}. "
                      f"Capex: {inp.get('capex_mode')}. Leases: {inp.get('lease_mode')}.")
-    t = _find(drivers, "Scenario inputs")
+    t = next((i for i, r in enumerate(drivers) if isinstance(r[0], str) and r[0].startswith("Scenario inputs")), None)
     if t is not None:
         heads = drivers[t + 2]                                   # Driver | Bear x3 | Base x3 | Bull x3 | Selected x3
+        o = _find(drivers, "Your overrides")                     # same shape: a value there replaces the default
+        over = {r[0]: r for r in drivers[o + 3:o + 30]} if o is not None else {}
         rows_ = []
         for r in drivers[t + 3:t + 30]:
             if r[0] in KEY_DRIVERS:
-                rows_.append([r[0]] + [pct(v) for v in r[4:7]] + [pct(r[1]), pct(r[7])])
+                ov = over.get(r[0], [None] * len(r))
+                v = [ov[j] if j < len(ov) and _num(ov[j]) is not None else r[j] for j in range(len(r))]
+                rows_.append([r[0]] + [pct(x) for x in v[4:7]] + [pct(v[1]), pct(v[7])])
         if rows_:
             lines += ["", _table(["Driver (Base case)", str(heads[4]), str(heads[5]), str(heads[6]),
                                   f"Bear {heads[1]}", f"Bull {heads[7]}"], rows_)]

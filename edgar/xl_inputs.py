@@ -1,5 +1,5 @@
 """Inputs tab: every setting in one place - scenario, price and currency, dilution, discount rate, terminal
-value, method choices and equity-bridge adjustments. Yellow / blue cells are yours to change; the Check column
+value, method choices and equity-bridge adjustments. Yellow cells are yours to change; the Check column
 flags values that are out of the usual range. The other tabs read from here."""
 from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Font
@@ -17,9 +17,9 @@ def write_inputs(ws, m):
     g, fin = m.grid, m.fin
     cur, foreign = fin.currency, fin.currency != "USD"
     ws["A1"], ws["A1"].font = f"{fin.name} ({fin.ticker}) - Inputs", st.TITLE_FONT
-    ws["A2"] = ("Every setting in one place. Blue = yours to change (yellow = usually left blank). Typed values "
-                "are kept when the workbook is rebuilt; clear a cell and rebuild to get its default back. The "
-                "yearly growth and margin paths are on the Drivers tab.")
+    ws["A2"] = ("Every setting in one place. " + st.INPUT_LEGEND + " Settings that act on one tab are typed "
+                "there and listed here as green links: click a blue underlined name to go to it. The list of inputs "
+                "on other tabs is at the bottom.")
     ws["A2"].font = st.NOTE_FONT
     for j, h in enumerate(("Setting", "Value", "Check", "What it is"), start=1):
         st.header_cell(ws.cell(row=3, column=j), h)
@@ -31,7 +31,7 @@ def write_inputs(ws, m):
     B = lambda key: f"B{R[key]}"
 
     def put(key, label, value, fmt=None, kind="formula", note="", reg=None, options=None, check=None, bold=False):
-        """kind: "input" (blue), "optional" (blue on yellow, normally blank), "formula" (black)."""
+        """kind: "input" or "optional" (normally blank): registered, so yellow; "formula" (black)."""
         r = R[key]
         ws.cell(row=r, column=1, value=label).font = st.font(bold=bold)
         c = ws.cell(row=r, column=2, value=value)
@@ -53,7 +53,7 @@ def write_inputs(ws, m):
         if check:
             ws.cell(row=r, column=3, value=check).font = WARN
         if note:
-            ws.cell(row=r, column=4, value=note).font = st.NOTE_FONT
+            st.hover_note(ws.cell(row=r, column=4), note).font = st.NOTE_FONT
         return c
 
     # ---- Scenario
@@ -101,15 +101,20 @@ def write_inputs(ws, m):
         f'=IFERROR(IF({B("Price override")}<>"",{B("Price override")},{B("Live close")})*{fx}/{B("Shares per listing")},"")',
         st.FMT["price"], bold=True,
         check=f'=IF(N({B("Share price")})=0,"No price: check the ticker prefix or type an override","")',
-        note="Used by the DCF and market cap" + (
+        note="Used by the valuation and market cap" + (
             f": dollar price x {cur} per dollar / ordinary shares per listed share" if foreign else ""))
     shares, as_of, how = fin.shares_out
-    put("Shares outstanding", "Shares outstanding", shares, st.FMT["shares"], "input" if shares else "optional",
-        reg=("Market", "Shares outstanding"),
-        check=f'=IF(N({B("Shares outstanding")})=0,"Needed for a value per share","")',
+    c = put("Shares filed", "Shares outstanding (filings)", shares, st.FMT["shares"],
         note=(f"Source: {how}" + (f", as of {as_of}" if as_of else "")) if shares else
-        "NOT FOUND in the SEC data (common with several share classes): type the total share count in full, "
-        "e.g. 1900000000")
+        "NOT FOUND in the SEC data (common with several share classes): type the count in the override below")
+    c.font = st.font(st.BLUE)                                             # data from the filings
+    put("Shares override", "Shares outstanding override", None, st.FMT["shares"], "optional",
+        reg=("Market", "Shares outstanding"),
+        note="Optional, in full (e.g. 1900000000): replaces the filed count, which stays above")
+    put("Shares outstanding", "Shares outstanding used",
+        f'=IF({B("Shares override")}<>"",{B("Shares override")},IF({B("Shares filed")}="","",{B("Shares filed")}))',
+        st.FMT["shares"], bold=True,
+        check=f'=IF(N({B("Shares outstanding")})=0,"Needed for a value per share: type it in the override","")')
     put("Market cap", "Market cap",
         f'=IF(N({B("Share price")})=0,"",{B("Share price")}*{B("Shares outstanding")})', st.FMT["usd"])
     put("52w low", "52-week low ($)", st.stock_range(B("Ticker"), "MIN"), st.FMT["usd_price"])
@@ -117,14 +122,15 @@ def write_inputs(ws, m):
 
     # ---- Dilution (treasury stock method for options; stock units count in full)
     d = fin.dilution or {}
-    found = "From the latest annual report; check it against the equity-compensation note" \
-        if any(d.values()) else ""
-    put("Options", "Stock options outstanding", d.get("options"), "#,##0", "optional", note=found or
-        "Optional, in full. Left blank = no dilution from options")
+    filed = lambda v, f: f"Filed in the latest annual report: {f.format(v)}. " if v else ""
+    put("Options", "Stock options outstanding", d.get("options"), "#,##0", "optional",
+        note=filed(d.get("options"), "{:,.0f}") + "Optional, in full. Left blank = no dilution from options")
     put("Option strike", f"Average exercise price ({'$' if not foreign else cur})", d.get("strike"), st.FMT["price"],
-        "optional", note="Options only dilute to the extent the share price is above this")
+        "optional", note=filed(d.get("strike"), "{:,.2f}") + "Options only dilute to the extent the share price is "
+                                                             "above this")
     put("RSUs", "Unvested stock units (RSUs / PSUs)", d.get("rsus"), "#,##0", "optional",
-        note="Optional, in full: counted one for one. Usually the larger item for tech companies")
+        note=filed(d.get("rsus"), "{:,.0f}") + "Optional, in full: counted one for one. Usually the larger item "
+                                               "for tech companies")
     put("Diluted shares", "Diluted shares used in the valuation",
         f'=IF(N({B("Shares outstanding")})=0,"",{B("Shares outstanding")}+N({B("RSUs")})'
         f'+IF(AND(N({B("Options")})>0,N({B("Share price")})>0),'
@@ -132,6 +138,7 @@ def write_inputs(ws, m):
         note="Shares outstanding + stock units + options x (1 - exercise price / share price)")
 
     # ---- settings collected while the valuation tab was written (defaults, notes and dropdown options)
+    has_rate = m.kind == "fin" or "dcf" in m.parts
     rate = xl_dcf.ref("wacc") if m.kind != "fin" else f"({B('rf')}+{B('beta')}*{B('erp')})"     # WACC / cost of equity
     rate_name = "WACC" if m.kind != "fin" else "the cost of equity"
     checks = {
@@ -139,7 +146,8 @@ def write_inputs(ws, m):
         "erp": f'=IF(OR({B("erp")}<0.03,{B("erp")}>0.07),"Outside the usual 3%-7%","")',
         "beta": f'=IF(OR({B("beta")}<0.5,{B("beta")}>2),"Unusual: outside 0.5-2.0","")',
         "g": (f'=IF({B("g")}>={rate},"At or above {rate_name}: the perpetuity value breaks",'
-              f'IF({B("g")}>{B("rf")},"Above the risk-free rate: hard to sustain forever",""))'),
+              f'IF({B("g")}>{B("rf")},"Above the risk-free rate: hard to sustain forever",""))' if has_rate else
+              f'=IF({B("g")}>0.04,"High for growth that lasts forever","")'),
         "multiple": (f'=IF(N({B("multiple")})>30,"High: compare with the Comps tab","")' if m.kind != "fin" else
                      f'=IF(N({B("multiple")})>4,"High for a price-to-book multiple","")'),
         "roic_t": f'=IF({B("roic_t")}<{rate},"Below WACC: growth destroys value","")',
@@ -150,15 +158,47 @@ def write_inputs(ws, m):
         if key not in m.settings:               # the financials template has fewer settings
             continue
         s = m.settings[key]
-        optional = s["value"] is None
-        c = put(key, s["label"], s["value"], None if s.get("options") else st.FMT[s["fmt"]],
-                "optional" if optional else "input", note=s["note"], reg=("DCF", s["label"]),
-                options=s.get("options"), check=checks.get(key))
+        if s.get("home"):
+            # typed on the tab it acts on: shown here as a link to the value in use, with a click-through
+            sheet, addr = s["home"]
+            src = s["used"]
+            c = put(key, s["label"], f'=IF({src}="","",{src})', None if s.get("options") else st.FMT[s["fmt"]],
+                    note=f"Set on the {sheet} tab (click the name): type in its yellow override cell. " + s["note"],
+                    check=checks.get(key))
+            c.font = st.font(st.GREEN)
+            st.link_to(ws.cell(row=R[key], column=1), sheet, addr)
+        else:
+            optional = s["value"] is None
+            c = put(key, s["label"], s["value"], None if s.get("options") else st.FMT[s["fmt"]],
+                    "optional" if optional else "input", note=s["note"], reg=("DCF", s["label"]),
+                    options=s.get("options"), check=checks.get(key))
         if key == "mid":
             c.number_format = "0"
     ws.cell(row=R["beta"], column=1).font = st.font(bold=True)
+    if m.kind != "fin":                     # beta is measured on the WACC tab (or not needed without a DCF)
+        for key in ("Beta benchmark", "Beta years", "Beta frequency", "Computed beta", "Adjusted beta"):
+            ws.row_dimensions[R[key]].hidden = True
+    if not has_rate:
+        # built without the DCF: only the long-run growth rate is used, so the valuation settings are hidden
+        ws.cell(row=R["g"], column=1).value = "Long-run growth (revenue growth fades toward it)"
+        for key in ("rf", "erp", "Beta benchmark", "Beta years", "Beta frequency", "Computed beta", "Adjusted beta",
+                    "beta", "kd", "multiple", "tv_mode", "roic_t", "mid", "sbc_mode", "capex_mode", "lease_mode",
+                    "val_override", "other_assets", "other_claims"):
+            ws.row_dimensions[R[key]].hidden = True
+        for title in ("Discount rate", "Method choices", "Equity bridge adjustments"):
+            ws.row_dimensions[INPUT_HEADERS[title]].hidden = True
+        ws.cell(row=INPUT_HEADERS["Terminal value"], column=1).value = "Forecast"
+        _index(ws, m)
+        _finish(ws)
+        return
 
-    # ---- beta: measured from prices, then adjusted
+    if m.kind != "fin":
+        _index(ws, m)
+        _finish(ws)
+        return
+
+    # ---- beta: measured from prices, then adjusted (the financials template; the standard model does this on
+    # the WACC tab)
     def pick(key, text, value, options, note):
         put(key, text, value, kind="input", options=options, reg=("Market", text), note=note)
 
@@ -183,7 +223,94 @@ def write_inputs(ws, m):
         f'=IF(ISNUMBER({B("Computed beta")}),2/3*{B("Computed beta")}+1/3,"")', st.FMT["num"],
         note="2/3 x raw + 1/3 x 1.0: measured betas drift toward the market's 1.0 over time")
 
-    ws.conditional_formatting.add(f"C5:C{max(R.values())}", FormulaRule(formula=['LEN(C5)>0'], fill=st.INPUT_FILL))
+    _index(ws, m)
+    _finish(ws)
+
+
+OVERRIDE_HEADS = ("Used", "Default", "Your override", "Check")
+
+
+def override_header(ws, r):
+    """Column heads for a block of settings written with setting(): B used, C default, D override, E check."""
+    for j, h in enumerate(OVERRIDE_HEADS, start=2):
+        st.header_cell(ws.cell(row=r, column=j), h, "ltm" if h == "Your override" else "fcst")
+
+
+def setting(ws, m, r, key, label, default, fmt, note="", options=None):
+    """One setting in the override pattern, on the tab it acts on:
+        B  used      = the override when there is one, else the default (formulas read this cell)
+        C  default   = what the model suggests (a number or a formula); never typed over
+        D  override  = yellow, blank: type here to replace the default, clear it to go back
+        E  check     = the range warning worked out on the Inputs tab
+        F  note
+    The Inputs tab lists it (from m.settings) with a link back here."""
+    sheet = ws.title
+    q = f"'{sheet}'" if " " in sheet else sheet
+    number = st.FMT[fmt] if not options else "General"
+    ws.cell(row=r, column=1, value=label)
+    used = ws.cell(row=r, column=2, value=f'=IF(D{r}="",IF(C{r}="","",C{r}),D{r})')
+    used.number_format, used.font = number, st.font(bold=True)
+    d = ws.cell(row=r, column=3, value=default)
+    d.number_format = number
+    d.font = st.formula_font(default) if isinstance(default, str) and default.startswith("=") else st.font()
+    o = ws.cell(row=r, column=4)
+    o.number_format = number
+    m.reg.add(ws, o, "DCF", label)
+    if options:
+        dv = DataValidation(type="list", formula1='"' + ",".join(options) + '"', allow_blank=True)
+        ws.add_data_validation(dv)
+        dv.add(o)
+        for c in (used, d, o):
+            c.alignment = st.CENTER
+    if key in R:
+        chk = f"{SHEET_NAMES['INP']}!$C${R[key]}"
+        ws.cell(row=r, column=5, value=f'=IF({chk}<>"",{chk},"")').font = WARN
+    if note:
+        st.hover_note(ws.cell(row=r, column=6), note).font = st.NOTE_FONT
+    m.settings[key] = {"label": label, "value": default, "fmt": fmt, "note": note, "options": options,
+                       "home": (sheet, f"D{r}"), "used": f"{q}!$B${r}"}
+    return used
+
+
+def _index(ws, m):
+    """Inputs that live on other tabs, with click-throughs."""
+    from .layout import RB_SHEET, RB_SWITCH
+    from . import xl_multiples
+    r = max(R.values()) + 2
+    c = ws.cell(row=r, column=1, value="Inputs on other tabs")
+    c.font, c.fill = st.HDR_FONT, st.FILL["fcst"]
+    for j in (2, 3, 4):
+        ws.cell(row=r, column=j).fill = st.FILL["fcst"]
+    g = m.grid
+    if m.kind == "fin":
+        from .xl_fin import SCEN_TITLE, SHEET
+        items = [(SHEET, f"B{SCEN_TITLE + 3}", "Bear / Base / Bull drivers",
+                  "Return on equity, payout and share count for each scenario")]
+    else:
+        items = [("Drivers", f"B{g.scen_first}", "Bear / Base / Bull drivers",
+                  "Year 1, mid-point and final-year growth and margins for each scenario")]
+    if "dcf" in m.parts and m.kind != "fin":
+        from .xl_wacc import SHEET as WS, W
+        items.append((WS, f"D{W['rf']}", "WACC settings", "Risk-free rate, equity risk premium, beta and its window, "
+                                                          "cost of debt"))
+        items.append(("DCF", f"D{xl_dcf.R['g']}", "DCF settings", "Terminal growth, exit multiple, method choices, equity bridge"))
+    if "multiples" in m.parts and m.kind != "fin":
+        items.append(("Multiples", f"{xl_multiples.COL['override']}{xl_multiples.R['pe']}", "Target multiples",
+                      "Forward P/E, PEG, EV/EBITDA, EV/Sales and P/FCF targets, ranges and On / Off"))
+    if m.kind != "fin" and ({"dcf", "multiples"} & m.parts or m.comps):
+        items.append(("Summary", "G13", "Price target weights", "How much each valuation method counts"))
+    if "revenue_build" in m.parts and m.kind != "fin":
+        items.append((RB_SHEET, RB_SWITCH.replace("$", ""), "Segment revenue build", "Segments, their revenue and growth"))
+    if m.comps:
+        items.append(("Comps", "A1", "Peer price overrides", "The yellow column on the Comps tab"))
+    items.append(("Notes", "A5", "Your notes", "Thesis, risks and sources: kept across rebuilds"))
+    for i, (sheet, addr, text, note) in enumerate(items, start=1):
+        st.link_to(ws.cell(row=r + i, column=1), sheet, addr, text)
+        ws.cell(row=r + i, column=4, value=note).font = st.NOTE_FONT
+
+
+def _finish(ws):
+    ws.conditional_formatting.add(f"C5:C{max(R.values())}", FormulaRule(formula=['LEN(C5)>0'], fill=st.WARN_FILL))
     for L, w in zip("ABCD", (44, 26, 46, 110)):
         ws.column_dimensions[L].width = w
     ws.freeze_panes = "B4"
@@ -195,6 +322,20 @@ def warnings_count(sheet=None):
     return f'COUNTIF({name}!$C$5:$C${max(R.values())},"?*")'
 
 
+NOTE_SECTIONS = (("Thesis", 8), ("Key assumptions and why", 10), ("Risks and what would change my mind", 8),
+                 ("Sources and to-do", 10))
+
+
+def note_lines(title):
+    """Rows of the typed lines under a Notes heading."""
+    r = 4
+    for t, n in NOTE_SECTIONS:
+        if t == title:
+            return range(r + 1, r + 1 + n)
+        r += n + 2
+    raise KeyError(title)
+
+
 def write_notes(ws, m):
     """A place for the thesis and sources that survives rebuilds (column A only)."""
     ws["A1"], ws["A1"].font = f"{m.fin.name} ({m.fin.ticker}) - Notes", st.TITLE_FONT
@@ -202,8 +343,7 @@ def write_notes(ws, m):
                 "workbook is rebuilt. Anything typed elsewhere on this tab, and any tab you add yourself, is not.")
     ws["A2"].font = st.NOTE_FONT
     r = 4
-    for title, lines in (("Thesis", 8), ("Key assumptions and why", 10), ("Risks and what would change my mind", 8),
-                         ("Sources and to-do", 10)):
+    for title, lines in NOTE_SECTIONS:
         st.header_cell(ws.cell(row=r, column=1), title)
         ws.cell(row=r, column=1).alignment = Alignment(horizontal="left")
         for k in range(1, lines + 1):

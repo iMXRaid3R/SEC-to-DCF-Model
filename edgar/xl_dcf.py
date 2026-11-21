@@ -3,18 +3,20 @@
 Valued as of today (or a typed valuation date): the part of forecast year 1 that has already passed is left
 out, later cash flows are discounted from the valuation date, and net debt comes from the latest balance
 sheet (the newest 10-Q when there is one)."""
+from openpyxl.styles import PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
 from . import xl_style as st
 from .layout import INPUT_ROWS, Ctx, input_ref
+from . import xl_inputs          # setting() / override_header(); module import: the two modules use each other
 
 # Input defaults (blue cells; overwrite on the sheet)
 DEFAULTS = {"rf": 0.0425, "erp": 0.055, "beta": 1.0, "kd": 0.05, "g": 0.025, "multiple": 15.0, "mid": 1}
 
 # Row map. Other modules (Assumptions, tests) refer to DCF cells through R / ref() only.
-_INPUTS = ["rf", "erp", "beta", "ke", "kd", "tax", "kd_at", "price", "shares", "mcap", "bs_date", "debt", "cash",
-           "nci", "net_debt", "other_assets", "other_claims", "claims", "wacc", "g", "multiple", "mid", "fy_end", "val_override", "val_date", "elapsed",
+_INPUTS = ["wacc", "price", "shares", "bs_date", "debt", "cash",
+           "nci", "net_debt", "other_assets", "other_claims", "claims", "g", "multiple", "mid", "fy_end", "val_override", "val_date", "elapsed",
            "choices", "tv_mode", "roic_n", "roic_t", "sbc_mode", "capex_mode", "lease_mode"]
 _FCF = ["year", "ebit", "taxes", "nopat", "da", "capex", "wc", "sbc_add", "ufcf", "share", "counted", "period",
         "factor", "pv", "ebitda"]
@@ -26,19 +28,21 @@ LEASE_MODES = ("Exclude", "Treat as debt")
 _VAL = ["sum_pv", "tv", "tv_period", "pv_tv", "ev", "less_debt", "less_nci", "plus_other", "less_other", "equity",
         "per_share", "cur_price",
         "upside", "tv_pct", "implied"]
-INPUT_HDR = 4
+RESULTS_HDR = 4                          # rows 4-7: the results first (value per share, vs. price)
+INPUT_HDR = 9
 R = {k: INPUT_HDR + 1 + i for i, k in enumerate(_INPUTS)}
 FCF_HDR = R[_INPUTS[-1]] + 2
 R.update({k: FCF_HDR + 1 + i for i, k in enumerate(_FCF)})
 VAL_HDR = R[_FCF[-1]] + 2
 R.update({k: VAL_HDR + 1 + i for i, k in enumerate(_VAL)})
-GRID_GROWTH = R[_VAL[-1]] + 3            # title row of the WACC x terminal growth grid
-GRID_MULTIPLE = GRID_GROWTH + 9          # title row of the WACC x exit multiple grid
-SENS_CENTER = (f"E{GRID_GROWTH + 4}", f"E{GRID_MULTIPLE + 4}")
-GRID_CELLS = tuple(f"$C${t + 2}:$G${t + 6}" for t in (GRID_GROWTH, GRID_MULTIPLE))     # the 5x5 value ranges
+GRID_GROWTH = R[_VAL[-1]] + 3            # title row of the two sensitivity grids, side by side:
+GRID_MULTIPLE = GRID_GROWTH              # WACC x terminal growth in B:G, WACC x exit multiple in J:O
+GRID_COLS = (2, 10)                      # the WACC column of each grid; its 5 value columns follow
+SENS_CENTER = (f"E{GRID_GROWTH + 4}", f"M{GRID_MULTIPLE + 4}")
+GRID_CELLS = (f"$C${GRID_GROWTH + 2}:$G${GRID_GROWTH + 6}", f"$K${GRID_MULTIPLE + 2}:$O${GRID_MULTIPLE + 6}")
 # Reverse DCF: what the current share price implies
 _REV = ["target_ev", "model_cagr", "imp_cagr", "imp_scale", "model_margin", "imp_margin", "imp_terminal"]
-REV_HDR = GRID_MULTIPLE + 9
+REV_HDR = GRID_GROWTH + 9
 R.update({k: REV_HDR + 1 + i for i, k in enumerate(_REV)})
 SOLVER_HDR = 3                           # on the hidden Calc sheet
 SOLVER_STEPS = 14
@@ -55,9 +59,10 @@ def write_dcf(ws, m, calc):
     g = m.grid
     n = len(g.fcst)
     ws["A1"], ws["A1"].font = f"{m.fin.name} ({m.fin.ticker}) - DCF Valuation", st.TITLE_FONT
-    ws["A2"] = ("This tab only calculates. Green cells in the first block come from the Inputs tab: change them "
-                "there. Valued as of the valuation date: the elapsed part of forecast year 1 is excluded and net "
-                "debt is from the latest balance sheet. Millions except per share.")
+    ws["A2"] = ("Settings: Default is what the model suggests; type in the yellow Your override column to replace "
+                "it (clear it to go back); Used is what the model uses. The banner above shows the effect. Valued as of the valuation date: the elapsed part "
+                "of forecast year 1 is excluded and net debt is from the latest balance sheet. Millions except "
+                "per share.")
     ws["A2"].font = st.NOTE_FONT
     last = Ctx(g, "DCF", g.last_fy)
     yr1 = Ctx(g, "DCF", g.fcst[0])
@@ -67,44 +72,33 @@ def write_dcf(ws, m, calc):
     B = lambda k: f"$B${R[k]}"
 
     def put(key, label, value, fmt, kind="formula", note=""):
+        """kind "input": a setting in the default / override / used pattern (xl_inputs.setting)."""
         r = R[key]
         ws.cell(row=r, column=1, value=label)
         c = ws.cell(row=r, column=2, value=value)
         c.number_format = st.FMT[fmt]
         if kind == "input":
-            # The setting itself lives on the Inputs tab (written later from m.settings); this cell shows it.
-            m.settings[key] = {"label": label, "value": value, "fmt": fmt, "note": note}
-            src = input_ref(key)
-            c.value, c.font, note = f'=IF({src}="","",{src})', st.font(st.GREEN), ""
-        elif isinstance(value, str):
+            return xl_inputs.setting(ws, m, r, key, label, value, fmt, note)
+        if isinstance(value, str):
             c.font = st.formula_font(value)
         if note:
-            ws.cell(row=r, column=3, value=note).font = st.NOTE_FONT
+            st.hover_note(ws.cell(row=r, column=6), note).font = st.NOTE_FONT
         return c
 
-    ws.cell(row=INPUT_HDR, column=1, value="Inputs (set on the Inputs tab) and capital structure").font = st.font(bold=True)
-    rf, rf_day = m.fin.rf
-    put("rf", "Risk-free rate", rf if rf else DEFAULTS["rf"], "pct", "input",
-        note=f"10-year Treasury yield as of {rf_day}" if rf else
-             "Default: the 10-year Treasury yield could not be downloaded for this build")
-    erp, erp_source = m.fin.erp
-    put("erp", "Equity risk premium", erp if erp else DEFAULTS["erp"], "pct", "input",
-        note=erp_source if erp else "Default: set \"equity_risk_premium\" in watchlist.json to change it for every model")
-    put("beta", "Beta", f"=IFERROR(ROUND({last.market('Adjusted beta')},2),{DEFAULTS['beta']:g})", "num", "input",
-        note="Defaults to the adjusted beta above (5-year monthly unless you change the window; 1.0 without "
-             "live prices). Type a number to override")
-    put("ke", "Cost of equity", f"={B('rf')}+{B('beta')}*{B('erp')}", "pct")
-    put("kd", "Pre-tax cost of debt", DEFAULTS["kd"], "pct", "input")
-    put("tax", "Tax rate (forecast year 1)", f"={yr1.v('Tax rate')}", "pct")
-    put("kd_at", "After-tax cost of debt", f"={B('kd')}*(1-{B('tax')})", "pct")
+    ws.cell(row=INPUT_HDR, column=1, value="Settings and the bridge to equity").font = st.font(bold=True)
+    xl_inputs.override_header(ws, INPUT_HDR)
+    from . import xl_wacc
+    c = put("wacc", "WACC", f"={xl_wacc.ref('wacc')}", "pct",
+            note="Worked out on the WACC tab (click the name): cost of equity, cost of debt and their weights")
+    c.font = st.font(st.GREEN, True)
+    st.link_to(ws.cell(row=R["wacc"], column=1), xl_wacc.SHEET, f"B{xl_wacc.W['wacc']}")
     put("price", "Share price", f"=N({last.market('Share price')})", "price")
-    ws.cell(row=R["price"], column=3,
+    ws.cell(row=R["price"], column=6,
             value=f"=IF({last.market('Price override')}<>\"\",\"Price override\","
                   f"IF({B('price')}=0,\"No price available\",\"Live close as of \"&TEXT({last.market('Price date')},\"yyyy-mm-dd\")))"
             ).font = st.NOTE_FONT
     put("shares", "Diluted shares", f"=N({last.market('Diluted shares')})", "shares",
         note="Shares outstanding plus the dilution entered on the Inputs tab")
-    put("mcap", "Market cap", f"={B('price')}*{B('shares')}", "usd")
     put("bs_date", "Latest balance sheet date", bs_col.end.date(), "date",
         note=("Latest 10-Q" if bs_col.kind == "ltm" else "Last fiscal year end (no newer 10-Q)")
              + " - source of debt, cash and NCI below")
@@ -127,19 +121,19 @@ def write_dcf(ws, m, calc):
     put("claims", "Net claims ahead of common equity",
         f"={B('net_debt')}+{B('nci')}+N({B('other_claims')})-N({B('other_assets')})", "usd",
         note="Net debt + other owners' interests + other claims - other non-operating assets")
-    put("wacc", "WACC", f"=IF(OR({B('price')}=0,{B('mcap')}=0),{B('ke')},{B('mcap')}/({B('mcap')}"
-                        f"+{B('debt')})*{B('ke')}+{B('debt')}/({B('mcap')}+{B('debt')})*{B('kd_at')})", "pct",
-        note="Uses cost of equity alone when there is no share price or share count")
     put("g", "Terminal growth", DEFAULTS["g"], "pct", "input")
     if m.comps:
         put("multiple", "Exit EV/EBITDA multiple", f"=IFERROR(ROUND({m.comps['EV / EBITDA']},1),{DEFAULTS['multiple']:g})",
-            "x", "input", note=f"Defaults to the peer median on the Comps tab ({DEFAULTS['multiple']:.0f}x when "
-                               "prices are unavailable); type a number to override")
+            "x", "input", note=f"Applied to {g.fcst[-1].header} EBITDA for the terminal value. Defaults to the peer "
+                               f"median on the Comps tab ({DEFAULTS['multiple']:.0f}x when prices are unavailable). "
+                               "Not the forward EV/EBITDA target on the Multiples tab")
     else:
         put("multiple", "Exit EV/EBITDA multiple", DEFAULTS["multiple"], "x", "input",
-            note="Build with --peers to default this to the peer median")
+            note=f"Applied to {g.fcst[-1].header} EBITDA for the terminal value. Not the forward EV/EBITDA target "
+                 "on the Multiples tab. Build with peers to default this to their median")
     put("mid", "Mid-year convention (1 = on)", DEFAULTS["mid"], "num", "input")
-    ws.cell(row=R["mid"], column=2).number_format = "0"
+    for j in (2, 3, 4):
+        ws.cell(row=R["mid"], column=j).number_format = "0"
     put("fy_end", "Last fiscal year end", g.last_fy.end.date(), "date")
     put("val_override", "Valuation date override", None, "date", "input", note="Optional: blank = today")
     put("val_date", "Valuation date", f'=IF({B("val_override")}="",TODAY(),{B("val_override")})', "date")
@@ -154,9 +148,7 @@ def write_dcf(ws, m, calc):
     last_Lc = get_column_letter(2 + n)
 
     def choice(key, label, options, default, note):
-        c = put(key, label, default, "num", "input", note=note)
-        c.number_format, c.alignment = "General", st.CENTER
-        m.settings[key]["options"] = options
+        xl_inputs.setting(ws, m, R[key], key, label, default, "num", note, options)
 
     choice("tv_mode", "Terminal cash flow (perpetuity method)", TV_MODES, TV_MODES[0],
            f"{TV_MODES[0]}: NOPAT x (1 - growth / return on new capital), so a capex-heavy final year doesn't set "
@@ -269,37 +261,60 @@ def write_dcf(ws, m, calc):
           f"/(1+{{w}})^${first_L}${R['period']}:${last_L}${R['period']})")
     tvp = f"$B${R['tv_period']}"
     tail = f"-{B('claims')})/{B('shares')}"
-    _grid(ws, GRID_GROWTH, "Value per share: WACC (rows) x terminal growth (columns)", B("g"), 0.005, "pct",
-          lambda w, x: f'=IFERROR(({pv.format(w=w)}+{tcf(x)}*(1+{x})/({w}-{x})/(1+{w})^{tvp}{tail},"")', B("wacc"))
-    _grid(ws, GRID_MULTIPLE, "Value per share: WACC (rows) x exit EV/EBITDA (columns)", B("multiple"), 1.0, "x",
-          lambda w, x: f'=IFERROR(({pv.format(w=w)}+{ebitda_n}*{x}/(1+{w})^{tvp}{tail},"")', B("wacc"))
+    _grid(ws, GRID_GROWTH, "Perpetuity: WACC (rows) x terminal growth (columns)", B("g"), 0.005, "pct",
+          lambda w, x: f'=IFERROR(({pv.format(w=w)}+{tcf(x)}*(1+{x})/({w}-{x})/(1+{w})^{tvp}{tail},"")', B("wacc"),
+          GRID_COLS[0])
+    _grid(ws, GRID_MULTIPLE, "Exit multiple: WACC (rows) x exit EV/EBITDA (columns)", B("multiple"), 1.0, "x",
+          lambda w, x: f'=IFERROR(({pv.format(w=w)}+{ebitda_n}*{x}/(1+{w})^{tvp}{tail},"")', B("wacc"),
+          GRID_COLS[1])
+    st.section(ws, GRID_GROWTH - 1, 1, 15, "Value per share: sensitivity")
 
     _reverse(ws, m, B, V, first_L, last_L, N, nopat_n, calc)
 
+    _results(ws)
     ws.column_dimensions["A"].width = 40
-    for j in range(2, max(8, 3 + n)):
-        ws.column_dimensions[get_column_letter(j)].width = 18 if j == 2 else 15
+    for j in range(2, max(16, 3 + n)):
+        ws.column_dimensions[get_column_letter(j)].width = 23 if j == 2 else 15 if j < 3 + n else 12
+    ws.column_dimensions["I"].width = max(ws.column_dimensions["I"].width or 0, 15)
     ws.freeze_panes = "B4"
 
 
-def _grid(ws, top, title, base_ref, step, fmt, formula, wacc_ref):
-    ws.cell(row=top, column=1, value=title).font = st.font(bold=True)
+def _results(ws):
+    """Rows 4-7: value per share and its upside under both terminal-value methods, before the workings."""
+    st.section(ws, RESULTS_HDR, 1, 3, "Results")
+    for j, h in ((2, "Perpetuity growth"), (3, "Exit multiple")):
+        st.header_cell(ws.cell(row=RESULTS_HDR + 1, column=j), h, "fcst")
+    for i, (label, key, fmt) in enumerate((("Value per share", "per_share", "price"), ("vs. share price", "upside", "pct"))):
+        r = RESULTS_HDR + 2 + i
+        ws.cell(row=r, column=1, value=label).font = st.font(bold=i == 0)
+        for col in ("B", "C"):
+            c = ws[f"{col}{r}"]
+            c.value = f'=IF({col}{R[key]}="","",{col}{R[key]})'
+            c.number_format, c.font = st.FMT[fmt], st.font(bold=i == 0)
+            c.fill = st.PatternFill("solid", fgColor=st.THEME["pale"])
+    st.row_rules(ws, [RESULTS_HDR + 2, RESULTS_HDR + 3], 3)
+
+
+def _grid(ws, top, title, base_ref, step, fmt, formula, wacc_ref, wcol=2):
+    """A 5 x 5 grid: WACC down column `wcol`, the other input across the next five columns."""
+    WL = get_column_letter(wcol)
+    ws.cell(row=top, column=max(1, wcol - 1), value=title).font = st.font(bold=True)
     hdr = top + 1
-    st.header_cell(ws.cell(row=hdr, column=2), "WACC \\ ")
+    st.header_cell(ws.cell(row=hdr, column=wcol), "WACC \\ ")
     offsets = (-2, -1, 0, 1, 2)
     for k, o in enumerate(offsets):
-        c = ws.cell(row=hdr, column=3 + k, value=f"={base_ref}+{o * step}")
+        c = ws.cell(row=hdr, column=wcol + 1 + k, value=f"={base_ref}+{o * step}")
         c.number_format, c.font, c.fill = st.FMT[fmt], st.HDR_FONT, st.FILL["fcst"]
     for i, o in enumerate(offsets):
         r = hdr + 1 + i
-        w = ws.cell(row=r, column=2, value=f"={wacc_ref}+{o * 0.005}")
+        w = ws.cell(row=r, column=wcol, value=f"={wacc_ref}+{o * 0.005}")
         w.number_format, w.font, w.fill = st.FMT["pct"], st.HDR_FONT, st.FILL["fcst"]
         for k in range(len(offsets)):
-            x_ref = f"{get_column_letter(3 + k)}${hdr}"
-            c = ws.cell(row=r, column=3 + k, value=formula(f"$B{r}", x_ref))
+            x_ref = f"{get_column_letter(wcol + 1 + k)}${hdr}"
+            c = ws.cell(row=r, column=wcol + 1 + k, value=formula(f"${WL}{r}", x_ref))
             c.number_format = st.FMT["price"]
             if o == 0 and k == 2:
-                c.fill, c.font = st.INPUT_FILL, st.font(bold=True)
+                c.fill, c.font = PatternFill("solid", fgColor=st.THEME["pale"]), st.font(bold=True)   # today's inputs
 
 
 def _growth_for_tv(X, B, fcf_n, nopat_n):

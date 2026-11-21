@@ -5,7 +5,7 @@ from openpyxl.styles import Alignment
 from openpyxl.worksheet.datavalidation import DataValidation
 
 from . import xl_style as st
-from .layout import (RB_GROW_FIRST, RB_GROW_TOTAL, RB_MODEL, RB_N, RB_SEG_FIRST, RB_SHEET, RB_SWITCH, RB_TOTAL,
+from .layout import (RB_OVR_FIRST, RB_GROW_FIRST, RB_GROW_TOTAL, RB_MODEL, RB_N, RB_SEG_FIRST, RB_SHEET, RB_SWITCH, RB_TOTAL,
                      RB_UNALLOC, Ctx)
 
 MM = '#,##0.0;(#,##0.0);"-"'
@@ -15,7 +15,8 @@ def write_build(ws, m, write_header):
     g, fin = m.grid, m.fin
     write_header(ws, g, f"{fin.name} ({fin.ticker}) - {RB_SHEET}",
                  "Optional. Type segment names and their revenue in $ millions (yellow), set growth by year, then "
-                 "switch the build On. Growth defaults to the Assumptions revenue growth for that year.",
+                 "switch the build On. Growth follows the Drivers revenue growth unless you type a rate in Your "
+                 "growth overrides below. Yellow cells are inputs.",
                  first="($ millions, as typed)")
     sw = ws[RB_SWITCH.replace("$", "")]
     ws["E1"], ws["E1"].font = "Use build:", st.font(bold=True)
@@ -49,9 +50,11 @@ def write_build(ws, m, write_header):
             elif col.kind == "fcst":
                 c.fill = gc.fill = st.FCST_BG
                 c.value = f"=N({prev.L}{r})*(1+{col.L}{gr})"
-                gc.value = f"={Ctx(g, 'RB', col).v('Revenue growth')}"
-                gc.font = st.font(st.BLUE)
-                m.reg.add(ws, gc, "Build", f"Growth {s + 1}", col.header)
+                ov = ws.cell(row=RB_OVR_FIRST + s, column=col.j)      # yours; blank = the Drivers growth
+                ov.number_format = st.FMT["pct"]
+                m.reg.add(ws, ov, "Build", f"Growth {s + 1}", col.header)
+                gc.value = f'=IF({ov.coordinate}="",{Ctx(g, "RB", col).v("Revenue growth")},{ov.coordinate})'
+                gc.font = st.font()
 
     def line(r, label, f, fmt=MM, bold=False, kinds=("hist", "ltm", "fcst")):
         ws.cell(row=r, column=1, value=label).font = st.font(bold=bold)
@@ -79,4 +82,13 @@ def write_build(ws, m, write_header):
             return None
         return f'=IF(OR(N({prev.L}{RB_TOTAL})=0,N({col.L}{RB_TOTAL})=0),"",{col.L}{RB_TOTAL}/{prev.L}{RB_TOTAL}-1)'
     line(RB_GROW_TOTAL, "Total of segments growth", total_growth, st.FMT["pct"], bold=True, kinds=("hist", "fcst"))
+    t = RB_OVR_FIRST - 2
+    ws.cell(row=t, column=1, value="Your growth overrides").font = st.font(bold=True)
+    ws.cell(row=t, column=2, value="Blank = the revenue growth on the Drivers tab for that year; type a rate to use "
+                                   "your own for a segment.").font = st.NOTE_FONT
+    st.header_cell(ws.cell(row=t + 1, column=1), "Segment")
+    for col in g.fcst:
+        st.header_cell(ws.cell(row=t + 1, column=col.j), col.header, "ltm")
+    for s_ in range(RB_N):
+        ws.cell(row=RB_OVR_FIRST + s_, column=1, value=f'=A{RB_SEG_FIRST + s_}&" growth"')
     ws.column_dimensions["A"].width = 46
