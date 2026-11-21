@@ -2,10 +2,18 @@
 
 [![tests](https://github.com/iMXRaid3R/SEC-to-DCF-Model/actions/workflows/tests.yml/badge.svg)](https://github.com/iMXRaid3R/SEC-to-DCF-Model/actions/workflows/tests.yml)
 
-Builds an Excel valuation model for a public company from its SEC filings: three linked statements, a ten-year
-forecast, a DCF, forward multiples (P/E, PEG, EV/EBITDA, EV/Sales, price / free cash flow), comparable companies
-and a one-page summary. Build all of it or only the parts you want. One command per company, and a roll-up
-across a portfolio.
+Builds an Excel valuation model for a public company straight from its SEC filings, in one command (or from a
+menu). Each workbook has:
+
+- three linked statements with up to 15 years of history and a 3-20 year forecast, driven by Bear / Base / Bull
+  scenarios you can override line by line;
+- a DCF with its own WACC tab, forward multiples (P/E, PEG, EV/EBITDA, EV/Sales, price / free cash flow), peer
+  comparables, and a bridge from enterprise value to value per share;
+- a dashboard Summary with a price target that blends the methods with your weights;
+- ratios, integrity checks, and notes that survive rebuilds.
+
+Rebuild after earnings and your typed inputs are kept, with a report of what changed in the filings. A roll-up
+reads every workbook into one portfolio table.
 
 The data comes from the SEC's free XBRL "company facts" API. Prices, exchange rates and betas are live Excel
 formulas (`STOCKHISTORY`), so the workbooks need Microsoft 365.
@@ -16,8 +24,12 @@ This is a personal research tool. Its output is a starting point for your own as
 
 ![Value per share by method](docs/football-field.jpg)
 
-The screenshots show Apple built with default settings, not a view on the stock. More: [Inputs](docs/inputs.jpg),
+The screenshots show Apple built with default settings, not a view on the stock, in an earlier layout (the
+Summary is now a dashboard and the tabs have a title bar in the company's colour). More: [Inputs](docs/inputs.jpg),
 [Drivers](docs/drivers.jpg), [DCF](docs/dcf.jpg).
+
+**Used an earlier version?** See [Upgrading from an older version](#upgrading-from-an-older-version) and
+[CHANGELOG.md](CHANGELOG.md). Nothing needs reinstalling.
 
 ## Setup
 
@@ -30,6 +42,28 @@ The screenshots show Apple built with default settings, not a view on the stock.
 
 On a Mac or Linux, run `chmod +x run` once, then use `./run`. Building workbooks works there; `--rollup` and
 `--writeup` read values through Excel on Windows, so they are Windows-only.
+
+## Upgrading from an older version
+
+No reinstall: update the code, then rebuild your workbooks. Your typed inputs come along.
+
+1. **Close your workbooks in Excel.**
+2. **Update the code.**
+   - If you cloned the repository: `git pull` in the project folder.
+   - If you downloaded a ZIP: download the new one and unzip it to a new folder, then copy across from the old
+     folder: `.edgar_email`, `watchlist.json`, `overrides/` (if you added any), your `*_financials.xlsx`
+     workbooks, and `valuation_log.csv` (your roll-up history). `backups/` and `cache/` are optional.
+   - Mac or Linux: run `chmod +x run` again if `./run` stops working.
+3. **Rebuild:** `./run --list all` (or `./run TICKER` one at a time). Each old workbook is copied to `backups/`
+   first. The build lists every input it carried over: values you typed move into the new override cells and
+   tabs (DCF settings to the WACC, Bridge and DCF tabs, scenario inputs to the Scenarios tab, dilution to the
+   Bridge tab). A **formula** you typed into a cell is not moved; the build names it so you can re-enter it.
+4. **Optional:** new settings in `watchlist.json` - `default_parts`, `default_history_years`,
+   `default_forecast_years`, `brand_colors`, `use_brand_colors`. Nothing breaks without them; copy the ones you
+   want from `watchlist.example.json`.
+
+Workbooks you don't rebuild still open and work, but the roll-up and write-up expect the new layout, so rebuild
+before using those. The whole list of changes is in [CHANGELOG.md](CHANGELOG.md).
 
 ## The menu
 
@@ -102,10 +136,10 @@ The SEC's data updates when the 10-Q or 10-K is filed, which can be days or week
 | Scenarios | Bear / Base / Bull: each driver's year-1, mid-point and final-year values, your overrides of them, and the scenario probabilities |
 | Drivers | The yearly growth and margin paths the model uses (history, then the selected scenario), your per-year overrides, and the results for the selected scenario |
 | Revenue Build | Optional segment build that replaces the single revenue growth driver |
-| Income Statement, Balance Sheet, Cash Flow | Five years of history, LTM, year to date, ten forecast years; subtotals ruled, and growth and margins in grey under the income statement's key lines |
+| Income Statement, Balance Sheet, Cash Flow | History (5 years by default), LTM, year to date, and the forecast (10 years by default); subtotals ruled, and growth and margins in grey under the income statement's key lines |
 | WACC | The discount rate: risk-free rate, equity risk premium and beta (measured from prices, with its window), cost of debt with last year's interest / debt for reference, market-value weights, and the WACC |
 | Bridge | From enterprise value to value per share: debt (with leases if you choose), cash, other owners' interests, other assets and claims, and the diluted share count with options and stock units |
-| DCF | Results first, then its settings (terminal growth, exit multiple, method choices) and the bridge to equity, free cash flow, two terminal-value methods, the two sensitivity grids side by side, reverse DCF |
+| DCF | Results first, then its settings (terminal growth, exit multiple, method choices) with the WACC and the bridge linked in, free cash flow, two terminal-value methods, the two sensitivity grids side by side, reverse DCF |
 | Multiples | Next-twelve-months EPS, EBITDA, revenue and free cash flow; a target multiple with a low-high range for each method, and an On / Off switch. Beside each: today's price on your forecast (next twelve months), today's price on reported results (last twelve months) and the peer median, which is also trailing, so the last two compare like with like |
 | Comps | Peers, their multiples, and the value they imply |
 | Ratios | Growth, margins, returns (ROE, ROIC, ROA), cash flow, leverage and per-share figures, history and forecast |
@@ -114,8 +148,8 @@ The SEC's data updates when the 10-Q or 10-K is filed, which can be days or week
 | Mapping, Raw | Which filing tag fed each number |
 
 **Inputs sit next to what they change.** The discount-rate settings are on the WACC tab, the DCF's own at the top
-of the DCF tab, multiple
-targets on the Multiples tab, scenario drivers on Drivers and the price-target weights on the Summary. The
+of the DCF tab, debt, cash and dilution on the Bridge tab, multiple targets on the Multiples tab, the Bear /
+Base / Bull cases on Scenarios, single-year overrides on Drivers, and the price-target weights on the Summary. The
 Inputs tab lists every setting with its current value: click a blue underlined name to jump to it. The top
 row of every tab with inputs shows the scenario, price target and upside, and the DCF and multiples values,
 so you see the effect of a change where you make it. On the Summary, click a method's name to go to its main
@@ -127,7 +161,7 @@ there is one:
 
 | Where | Default | Your override |
 |---|---|---|
-| DCF settings | Default column (e.g. beta from prices, exit multiple from peers) | Your override column |
+| WACC, Bridge and DCF settings | Default column (e.g. beta from prices, exit multiple from peers, dilution from the filings) | Your override column |
 | Multiples | Default target (peer median or a set multiple) | Your target; Range +/- sets Low / High |
 | Scenarios, Bear / Base / Bull | Scenario inputs (defaults) table | Your overrides table below it, same layout |
 | Drivers, single years | The scenario path in the rows at the top | Your overrides by year (that year is shaded orange at the top) |
@@ -173,7 +207,7 @@ scenario and a probability-weighted target across Bear, Base and Bull.
 - **Your inputs survive rebuilds.** Anything you type into an input cell is carried into the next build and
   listed in the console. The previous file is copied to `backups/` first. Tabs you add yourself are not carried.
 - **Scenarios.** The Scenario dropdown on Inputs switches the whole model. A workbook shows one scenario at a
-  time; the roll-up reads all three and applies the probabilities set on Inputs.
+  time; the roll-up reads all three and applies the probabilities set on the Scenarios tab.
 - **Year one uses reported results.** When a 10-Q is newer than the last 10-K, the first forecast year is the
   months already reported plus a forecast for the rest.
 - **PEG.** The fair P/E is the target PEG (default 1.0) times the forecast's yearly EPS growth in percent, over
@@ -195,10 +229,11 @@ scenario and a probability-weighted target across Bear, Base and Bull.
   flow and net debt don't describe them, so they are valued on equity. The forecast is a return on equity and a
   payout; value is book equity plus the present value of returns above the cost of equity, with an exit
   price-to-book cross-check. It has Summary, Inputs and Equity Model tabs and works with the roll-up and write-up.
-  Preferred stock is not separated from common equity, and a company that doesn't report shareholders' equity
+  It keeps the simpler older arrangement (settings, dilution and probabilities on Inputs). Preferred stock is
+  not separated from common equity, and a company that doesn't report shareholders' equity
   on its own line (Brookfield, for example) can't be valued this way.
-- **Gaps in the SEC data:** some companies have no usable share count (multiple share classes; type it on
-  Inputs), some don't tag a line such as depreciation, and a foreign filer's latest year can be missing.
+- **Gaps in the SEC data:** some companies have no usable share count (multiple share classes; type it in the
+  share count override on Inputs), some don't tag a line such as depreciation, and a foreign filer's latest year can be missing.
 - **Roll-up and write-up:** Windows with Excel only, because they read calculated values through Excel.
 
 ## Tests
@@ -220,6 +255,7 @@ edgar/mapping.py    line item -> XBRL tags (US GAAP and IFRS)
 edgar/transform.py  filings -> annual, LTM and year-to-date values
 edgar/layout.py     every row of every sheet and its formulas
 edgar/xl_*.py       sheet writers (model, inputs, DCF, summary, revenue build)
+edgar/xl_style.py   the house style: colours, title bars, brand accent
 edgar/xl_multiples.py  the Multiples tab
 edgar/xl_wacc.py    the WACC tab
 edgar/xl_bridge.py  the Bridge tab (enterprise value to value per share)
