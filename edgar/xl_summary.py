@@ -167,7 +167,7 @@ def write_summary(ws, m):
     if not has_methods:
         _cards(ws, m, None, price_usd)
         r = TABLE_TOP
-        ws.cell(row=r, column=1, value="Built with the three statements only: rebuild with --parts all for the DCF, "
+        ws.cell(row=r, column=1, value="Built with the core model only: rebuild with --parts all for the DCF, "
                                        "multiples and comps.").font = Font(italic=True, color=MUTED)
         kf = _key_figures(ws, m, r + 2, foreign)
         _revenue_chart(ws, m, kf + 1)

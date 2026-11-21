@@ -553,7 +553,7 @@ def test_summary_parse_handles_multiples_and_statements_only():
 def test_menu_builds_with_the_chosen_parts(monkeypatch, capsys):
     from edgar import menu, sec
     monkeypatch.setattr(sec, "DEFAULT_EMAIL", "someone@example.com")
-    answers = iter(["1", "acme", "1 4", "", "n", "q"])                   # build ACME without DCF and Revenue Build
+    answers = iter(["1", "acme", "1 4", "", "7", "", "n", "q"])         # no DCF or Revenue Build; 7 years of history
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
     monkeypatch.setattr(menu, "_watchlist", lambda: {"peers": {"ACME": ["BETA"]}})
     calls = []
@@ -562,8 +562,8 @@ def test_menu_builds_with_the_chosen_parts(monkeypatch, capsys):
         calls.append(args)
     fake_main.open_file = lambda path: None
     menu.menu(fake_main)
-    assert calls == [["ACME", "--parts", "comps,multiples"]]
-    assert "> ./run ACME --parts comps,multiples" in capsys.readouterr().out
+    assert calls == [["ACME", "--parts", "comps,multiples", "--years", "7", "--forecast-years", "10"]]
+    assert "> ./run ACME --parts comps,multiples --years 7 --forecast-years 10" in capsys.readouterr().out
 
 
 # ---- input highlighting, price target ------------------------------------------
@@ -769,3 +769,11 @@ def test_bridge_scenarios_and_ratios_tabs(fins, tmp_path):
     wb2, m2 = build_workbook(fins["ISRG"], 5)
     carry_over(tmp_path / "old.xlsx", wb2, m2.reg)
     assert wb2["Bridge"][f"D{K['rsus']}"].value == 3_000_000
+
+
+def test_history_and_forecast_years_are_chosen_and_remembered():
+    from edgar import parts as P
+    assert P.years() == (5, 10)
+    assert P.years(8, None, remembered=(6, 12)) == (8, 12)               # asked-for wins, else what it had
+    assert P.years(None, None, default=(7, 15)) == (7, 15)               # watchlist.json default
+    assert P.years(40, 1) == (15, 3)                                      # held inside the allowed ranges

@@ -40,17 +40,29 @@ def _watchlist():
     return {}
 
 
+def _number(prompt, default, bounds):
+    """A whole number within bounds; Enter keeps the default, anything else asks again."""
+    lo, hi = bounds
+    while True:
+        got = _ask(prompt)
+        if not got:
+            return default
+        if got.isdigit() and lo <= int(got) <= hi:
+            return int(got)
+        print(f"  A whole number from {lo} to {hi}, please.")
+
+
 def pick_parts(current, peers):
     """Toggle list. Returns the chosen set of parts, or None to go back."""
     chosen = set(current)
     while True:
-        print("\nParts to include (the three linked statements are always built):")
+        print(f"\nAlways built: {P.ALWAYS}. Optional parts:")
         for i, part in enumerate(P.PARTS, start=1):
             extra = ""
             if part == "comps":
                 extra = f"   peers: {', '.join(peers)}" if peers else "   (no peers listed in watchlist.json: skipped)"
             print(f"  [{'x' if part in chosen else ' '}] {i}  {P.NAMES[part]}{extra}")
-        got = _ask("Numbers switch a part on/off, s = statements only, a = all, b = back, Enter = build: ").lower()
+        got = _ask("Numbers switch a part on/off, s = core model only, a = all, b = back, Enter = build: ").lower()
         if not got:
             return chosen
         if got == "b":
@@ -108,7 +120,14 @@ def menu(main):
                 chosen = pick_parts(default, peers)
                 if chosen is None:
                     continue
-                args = [ticker, "--parts", ",".join(sorted(chosen)) or "statements"] + email
+                hist, fcst = P.years(remembered=P.previous_years(path) if path.exists() else (None, None),
+                                     default=(wl.get("default_history_years"), wl.get("default_forecast_years")))
+                hist = _number(f"Years of history ({P.HISTORY[1][0]}-{P.HISTORY[1][1]}, Enter = {hist}): ", hist,
+                               P.HISTORY[1])
+                fcst = _number(f"Years of forecast ({P.FORECAST[1][0]}-{P.FORECAST[1][1]}, Enter = {fcst}): ", fcst,
+                               P.FORECAST[1])
+                args = [ticker, "--parts", ",".join(sorted(chosen)) or "statements",
+                        "--years", str(hist), "--forecast-years", str(fcst)] + email
                 if _run(main, args) and (ROOT / path.name).exists() and _yes("Open it in Excel?"):
                     main.open_file(path)
             elif choice == "2":

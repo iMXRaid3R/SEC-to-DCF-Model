@@ -97,7 +97,7 @@ def render(ticker, by_scenario, selected, weights, blocks, today=None):
     if body:
         lines.append(_table(["Method"] + list(SCENARIOS), body))
     else:
-        lines.append("*Built with the three statements only: no valuation methods in this workbook.*")
+        lines.append("*Built with the core model only: no valuation methods in this workbook.*")
     lines.append("")
     extras = []
     if any(s.get("target") is not None for s in scen):

@@ -39,7 +39,8 @@ choice prints the command it runs, so you can type it directly next time.
 
 ## Choosing what to build
 
-The three linked statements, with the Drivers, Inputs and Checks tabs, are always built. The rest is optional:
+The core model is always built: Summary, Inputs, Scenarios, Drivers, the three linked statements, Ratios, Checks
+and Notes. The rest is optional:
 
 | Part | Tab | Switch it off with |
 |---|---|---|
@@ -48,8 +49,13 @@ The three linked statements, with the Drivers, Inputs and Checks tabs, are alway
 | Comps | Comps: peers' multiples (needs peers in `watchlist.json` or `--peers`) | `--no-comps` |
 | Revenue Build | Revenue Build: segment-by-segment revenue | `--no-revenue-build` |
 
-`--statements-only` builds just the three statements; `--parts dcf,multiples` names exactly what you want, and
-`--parts all` turns everything back on. A workbook remembers its parts, so a plain rebuild keeps them. Set
+`--statements-only` builds the core model alone; `--parts dcf,multiples` names exactly what you want, and
+`--parts all` turns everything back on. A workbook remembers its parts, so a plain rebuild keeps them.
+
+History and forecast length: `--years N` (2-15 fiscal years of history, default 5) and `--forecast-years N`
+(3-20, default 10). The menu asks for both. A workbook remembers them too, and `"default_history_years"` /
+`"default_forecast_years"` in `watchlist.json` set them for new workbooks. If the SEC data has fewer annual
+reports than you ask for, the build says so and uses what there is. Set
 `"default_parts"` in `watchlist.json` (e.g. `"dcf,multiples"`) to change what new workbooks get. Inputs you
 typed on a tab you switch off are kept in the workbook and return when you switch it back on.
 
@@ -61,7 +67,7 @@ Run these from the project folder. In Git Bash use `./run`; in cmd or PowerShell
 |---|---|
 | `./run` | The menu |
 | `./run ISRG` | Build or rebuild `ISRG_financials.xlsx` (add `--open` to open it in Excel afterwards) |
-| `./run ISRG --statements-only` | Just the three linked statements |
+| `./run ISRG --statements-only` | The core model only, no valuation tabs |
 | `./run --list holdings` | Build every ticker in a `watchlist.json` group (`holdings`, `watchlist`, `all`) |
 | `./run --rollup` | Read every built workbook through Excel and write `Portfolio.xlsx` and `valuation_log.csv` |
 | `./run --rollup --base-only` | Same, Base scenario only (about a third of the time) |
@@ -72,7 +78,7 @@ Run these from the project folder. In Git Bash use `./run`; in cmd or PowerShell
 | `./run --fetch all` | Download data only, build nothing |
 | `./run --comps ISRG SYK MDT` | Standalone comparables table |
 
-Other options: `--peers T1 T2`, `--parts LIST`, `--no-dcf`, `--no-multiples`, `--no-comps`, `--no-revenue-build`, `--years N`, `--forecast-years N`, `--template financial`,
+Other options: `--peers T1 T2`, `--parts LIST`, `--years N`, `--forecast-years N`, `--no-dcf`, `--no-multiples`, `--no-comps`, `--no-revenue-build`, `--template financial`,
 `--offline`, `--refresh`, `--fresh`. Run `./run --help` for the full list.
 
 Close a workbook in Excel before rebuilding it.

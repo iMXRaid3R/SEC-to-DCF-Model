@@ -7,7 +7,7 @@ P/FCF), Comps and Revenue Build.
 
 Usage:
     python edgar_etl.py                                      # the menu
-    python edgar_etl.py ISRG --statements-only               # just the three linked statements
+    python edgar_etl.py ISRG --statements-only               # the core model only, no valuation tabs
     python edgar_etl.py ISRG --no-dcf --no-revenue-build     # leave parts out (remembered on rebuild)
     pip install requests pandas openpyxl        (or prefix commands with: uv run --with requests --with pandas --with openpyxl)
     python edgar_etl.py ISRG                                 # peers come from watchlist.json when listed there
@@ -98,7 +98,11 @@ def build_one(a, ticker, peers, out=None, quiet=False):
             print(f"  {end}  {val:>18,.0f} {unit:<11} {tag}   - {label[:60]}")
         print(f"\nTo use one, add it to overrides/{ticker}.json, e.g. {{\"Interest Income\": [\"TagName\"]}}")
         return
-    fin = load_financials(facts, ticker, name, a.years, load_overrides(ticker))
+    out = Path(out or f"{ticker}_financials.xlsx")
+    old = out.exists() and not a.fresh and not a.since
+    hist_n, fcst_n = parts_mod.years(a.years, a.forecast_years,
+                                     parts_mod.previous_years(out) if old else (None, None), a.default_years)
+    fin = load_financials(facts, ticker, name, hist_n, load_overrides(ticker))
     if a.since:
         if not Path(a.since).exists():
             raise EdgarError(f"--since: no file {a.since}")
@@ -120,8 +124,7 @@ def build_one(a, ticker, peers, out=None, quiet=False):
     if fin.currency != "USD":
         print(f"Reports in {fin.currency} ({fin.annual_form}): the workbook converts the dollar share price; "
               f"ordinary shares per US-listed share = {fin.adr_ratio:g} (watchlist.json \"adr_ratio\")")
-    out = Path(out or f"{ticker}_financials.xlsx")
-    remembered = parts_mod.previous(out) if out.exists() and not a.fresh else None
+    remembered = parts_mod.previous(out) if old else None
     parts = parts_mod.resolve(a.parts, a.off, remembered, a.default_parts)
     if "comps" in parts and not peers:
         parts.discard("comps")
@@ -129,7 +132,11 @@ def build_one(a, ticker, peers, out=None, quiet=False):
             print(f"  ! No peers for {ticker}: add them under \"peers\" in watchlist.json or use --peers, for a Comps tab")
     rows = peer_rows(peers, a.email, a.refresh, skip={ticker}, adr=a.adr) if peers and "comps" in parts else []
     template = a.template or a.templates.get(ticker)
-    wb, model = build_workbook(fin, a.forecast_years, rows, template, parts)
+    wb, model = build_workbook(fin, fcst_n, rows, template, parts)
+    wb["_inputs"].append([parts_mod.YEARS_KEY, "", "", json.dumps({"history": hist_n, "forecast": fcst_n})])
+    short = len(fin.cols) < hist_n
+    print(f"Years: {len(fin.cols)} of history, {fcst_n} forecast"
+          + (f" (asked for {hist_n}: the SEC data has no more annual reports)" if short else ""))
     if model.kind == "fin":
         print("Financial company: built with the financials template (valued on equity, not free cash flow). "
               "Use --template standard to force the standard model.")
@@ -242,8 +249,10 @@ def main(argv=None):
     p.add_argument("ticker", nargs="?", help="Ticker, e.g. AAPL")
     p.add_argument("--email", default=DEFAULT_EMAIL,
                    help="Your email (SEC User-Agent requirement; default: .edgar_email file or EDGAR_EMAIL)")
-    p.add_argument("--years", type=int, default=5, help="Number of historical fiscal years (default 5)")
-    p.add_argument("--forecast-years", type=int, default=10, help="Number of forecast years (default 10)")
+    p.add_argument("--years", type=int, metavar="N",
+                   help="Fiscal years of history, 2-15 (default: what the workbook had, else 5)")
+    p.add_argument("--forecast-years", type=int, metavar="N",
+                   help="Forecast years, 3-20 (default: what the workbook had, else 10)")
     p.add_argument("--out", help="Output .xlsx path (default <TICKER>_financials.xlsx, or comps.xlsx)")
     p.add_argument("--json", help="Load a saved companyfacts JSON (.json or .json.gz) instead of calling SEC")
     p.add_argument("--refresh", action="store_true", help="Download again even if cached today")
@@ -255,7 +264,8 @@ def main(argv=None):
                         "comps, revenue_build - or 'all', or 'statements' for the three statements only. Default: "
                         "what the workbook was built with last time, else \"default_parts\" in watchlist.json, else all")
     p.add_argument("--statements-only", dest="parts", action="store_const", const=set(),
-                   help="Only the three linked statements (with Drivers, Inputs and Checks): no valuation tabs")
+                   help="Only the core model (Inputs, Scenarios, Drivers, the statements, Ratios, Checks): no "
+                        "valuation tabs")
     for part, text in (("dcf", "the DCF tab"), ("multiples", "the Multiples tab (P/E, PEG, EV/EBITDA, ...)"),
                        ("comps", "the Comps tab"), ("revenue-build", "the Revenue Build tab")):
         p.add_argument(f"--no-{part}", dest="off", action="append_const", const=part.replace("-", "_"),
@@ -296,8 +306,10 @@ def main(argv=None):
         main.open_file = open_file
         return menu(main)
     a = p.parse_args(argv)
-    if a.forecast_years < 3:
-        p.error("--forecast-years must be at least 3")
+    if a.forecast_years is not None and not 3 <= a.forecast_years <= 20:
+        p.error("--forecast-years must be between 3 and 20")
+    if a.years is not None and not 2 <= a.years <= 15:
+        p.error("--years must be between 2 and 15")
     if a.setup:
         return setup(a)
     sec.OFFLINE = a.offline
@@ -306,6 +318,7 @@ def main(argv=None):
     a.adr = {k.upper(): v for k, v in wl.get("adr_ratio", {}).items()}
     a.templates = {k.upper(): v for k, v in wl.get("template", {}).items()}
     a.off = a.off or []
+    a.default_years = (wl.get("default_history_years"), wl.get("default_forecast_years"))
     dp = wl.get("default_parts")
     try:
         a.default_parts = None if dp is None else parts_mod.parse(dp if isinstance(dp, str) else ",".join(dp))
