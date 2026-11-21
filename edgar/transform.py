@@ -29,6 +29,8 @@ class Financials:
     ytd_months: int = 0         # months covered by ytd
     dilution: dict = None       # {"options", "strike", "rsus"} from the latest annual report, where tagged
     brand: str = None           # accent colour (hex) for the workbook, from watchlist.json "brand_colors"
+    fy_names: dict = None       # fiscal-year end -> the year the company calls it (NVIDIA: Jan 2026 = 2026)
+    splits: list = None         # stock splits found in the filings, as (factor, after, by): see split_events
 
     def looks_financial(self):
         """Banks, insurers and asset managers: no classified balance sheet and no operating-income line.
@@ -50,17 +52,149 @@ def facts_to_df(facts_json):
                     rows.append({
                         "ns": ns, "tag": tag, "unit": unit, "start": e.get("start"), "end": e["end"],
                         "val": e["val"], "filed": e["filed"], "form": form, "accn": e.get("accn"),
+                        "fy": e.get("fy"), "fp": e.get("fp"),
                     })
     df = pd.DataFrame(rows)
     if df.empty or not (df["ns"].isin(FACT_NAMESPACES) & df["form"].isin(ANNUAL_FORMS)).any():
         raise EdgarError("No annual financial facts (10-K, 20-F or 40-F) found for this CIK. Likely a newly "
                          "registered entity (e.g. a new holding company after a reorganization) with no annual "
                          "report yet, or a foreign filer that doesn't tag its financials.")
-    df["end"] = pd.to_datetime(df["end"])
-    df["start"] = pd.to_datetime(df["start"])
+    df["end"] = pd.to_datetime(df["end"], errors="coerce")
+    df["start"] = pd.to_datetime(df["start"], errors="coerce")
     df["filed"] = pd.to_datetime(df["filed"])
+    # a mistyped date (year 0201 or 9999, say) would overflow the date arithmetic below: drop the fact
+    ok = df["end"].between("1980-01-01", "2100-01-01") & (df["start"].isna() | df["start"].between("1980-01-01", "2100-01-01"))
+    df = df[ok].copy()
     df["days"] = (df["end"] - df["start"]).dt.days
     return df
+
+
+# --------------------------------------------------------------------------
+# Stock splits: filings made before a split report pre-split share counts and per-share figures. Later filings
+# restate the periods they repeat, but older years keep their pre-split numbers, so a 10-for-1 split shows up
+# as a tenfold jump in the share count. Splits are found from those restatements and older figures adjusted.
+# --------------------------------------------------------------------------
+_SHARE_TAGS = ("WeightedAverageNumberOfDilutedSharesOutstanding", "WeightedAverageNumberOfSharesOutstandingBasic",
+               "WeightedAverageShares", "AdjustedWeightedAverageShares")
+_EPS_TAGS = ("EarningsPerShareDiluted", "EarningsPerShareBasic", "EarningsPerShareBasicAndDiluted",
+             "DilutedEarningsLossPerShare", "BasicEarningsLossPerShare")
+
+
+def _nice(f):
+    """A measured ratio rounded to the split the company announced (3.0008 -> 3, 1.5 for 3-for-2)."""
+    n = round(f * 2) / 2 if f >= 1 else 1 / (round(2 / f) / 2)
+    return n if abs(n / f - 1) < 0.02 else f
+
+
+def _share_facts(df):
+    s = df[df["ns"].isin(FACT_NAMESPACES) & df["tag"].isin(_SHARE_TAGS + _EPS_TAGS) & (df["val"] != 0)]
+    return s[(s["unit"] == "shares") | s["unit"].str.endswith("/shares")]
+
+
+def split_events(df):
+    """Stock splits as a list of (factor, after, by): figures filed on or before `after` are pre-split, those
+    filed on or after `by` already reflect it; in between, see split_scales. Later filings restate the periods
+    they repeat, so a split shows as a share count and an earnings per share that change, inversely, by the same
+    ratio. A share count restated alone is a tagging or scale error, not a split, so an event needs both."""
+    pairs = []                                    # (after, by, ratio, is_share_count)
+    for (tag, start, end, unit), g in _share_facts(df).groupby(["tag", "start", "end", "unit"], dropna=False):
+        rows = list(g.sort_values("filed").drop_duplicates("filed", keep="last").itertuples())
+        for a, b in zip(rows, rows[1:]):
+            shares = tag in _SHARE_TAGS
+            r = b.val / a.val if shares else a.val / b.val
+            if r > 0 and not 0.8 < r < 1.25 and 1 / 60 < r < 60:
+                pairs.append((a.filed, b.filed, r, shares))
+    events = []                                   # [after, by, share ratios, eps ratios]
+    for after, by, r, shares in sorted(pairs, key=lambda p: p[1] - p[0]):      # tightest windows first
+        for e in events:
+            ref = e[2] or e[3]
+            if after < e[1] and by > e[0] and abs(r / (sum(ref) / len(ref)) - 1) < 0.15:
+                e[0], e[1] = max(e[0], after), min(e[1], by)
+                (e[2] if shares else e[3]).append(r)
+                break
+        else:
+            events.append([after, by, [r] if shares else [], [] if shares else [r]])
+    out = []
+    for after, by, sh, eps in events:
+        if len(sh) >= 2 and eps:                  # basic and diluted, or two periods; and per-share confirms
+            sh = sorted(sh)
+            out.append((_nice(sh[len(sh) // 2]), after, by))
+    return sorted(out, key=lambda e: e[1])
+
+
+def split_scales(df, events):
+    """accession -> factor turning that filing's share counts into today's shares (per-share figures are divided
+    by it). A filing made between the last one known to be pre-split and the first known to be post-split is
+    placed by its own share count: if it is about the split ratio below the post-split filing's, it is pre-split."""
+    s = _share_facts(df)
+    level = (s[s["tag"].isin(_SHARE_TAGS)].sort_values(["end", "filed"]).groupby("accn")["val"].last())
+    filed = s.groupby("accn")["filed"].max()
+    by_level = {}
+    for f, after, by in events:
+        post = [level[a] for a in filed[filed == by].index if a in level.index]
+        by_level[by] = post[0] if post else None
+    scales = {}
+    for accn, d in filed.items():
+        scale = 1.0
+        for f, after, by in events:
+            if d <= after:
+                pre = True
+            elif d >= by:
+                pre = False
+            else:
+                ref, own = by_level[by], level.get(accn)
+                pre = bool(ref and own and abs(ref / own / f - 1) < 0.25)
+            if pre:
+                scale *= f
+        scales[accn] = scale
+    return scales
+
+
+def adjust_for_splits(df, events):
+    """Restate share counts and per-share figures in today's shares."""
+    if not events:
+        return df
+    scales = split_scales(df, events)
+
+    def by_date(when):                            # a filing with no share figures of its own
+        return float(pd.Series([f for f, after, _ in events if when <= after]).prod()) if events else 1.0
+
+    df = df.copy()
+    is_sh = df["unit"] == "shares"
+    per_sh = df["unit"].str.endswith("/shares")
+    rows = is_sh | per_sh
+    f = pd.Series([scales[a] if a in scales else by_date(w)
+                   for a, w in zip(df.loc[rows, "accn"], df.loc[rows, "filed"])], index=df.index[rows], dtype=float)
+    df.loc[is_sh, "val"] = df.loc[is_sh, "val"] * f[is_sh[rows].values].values
+    df.loc[per_sh, "val"] = df.loc[per_sh, "val"] / f[per_sh[rows].values].values
+    df["split"] = 1.0
+    df.loc[rows, "split"] = f.values                 # shown on the Raw tab next to the tag
+    return df
+
+
+def fiscal_year_names(df, cols):
+    """The fiscal year each column's company calls it. The date rule (a year ending in January or February
+    belongs to the year before, so a 52/53-week year ending 1 January stays in the old year) is right for most
+    companies but not all: NVIDIA calls the year ending January 2026 fiscal 2026, Target calls its year ending
+    then fiscal 2025. The annual reports say which (the "fy" of the 10-K or 20-F that first covered the year),
+    so the most common difference between them and the date rule is applied to every column. None when the
+    filings don't say."""
+    rule = lambda end: (end - pd.Timedelta(days=45)).year
+    a = df[df["ns"].isin(FACT_NAMESPACES) & df["form"].isin(ANNUAL_FORMS) & df["days"].between(350, 380)
+           & (df["fp"] == "FY") & df["fy"].notna()]
+    diffs = []
+    for end in cols:
+        s = a[a["end"] == end]
+        if not s.empty:
+            d = int(s.sort_values("filed")["fy"].iloc[0]) - rule(end)
+            if d in (-1, 0, 1):
+                diffs.append(d)
+    if not diffs:
+        return None
+    best = max(set(diffs), key=diffs.count)
+    if diffs.count(best) * 2 <= len(diffs):
+        return None
+    return {end: rule(end) + best for end in cols}
 
 
 def sum_components(sub, parts):
@@ -124,7 +258,10 @@ def build_statement(df, mapping, currency="USD"):
         sub = sub.sort_values(["end", "rank"]).drop_duplicates("end", keep="first")
         values[label] = {r.end: r.val for r in sub.itertuples()}
         for r in sub.itertuples():
-            sources.append({"Line Item": label, "Period End": r.end.date(), "Tag": r.tag,
+            adj = getattr(r, "split", 1.0)
+            adj = 1.0 if adj != adj else adj                        # NaN for summed components
+            note = "" if abs(adj - 1) < 1e-9 else f" [restated for stock splits: shares x{adj:g}]"
+            sources.append({"Line Item": label, "Period End": r.end.date(), "Tag": r.tag + note,
                             "Value": r.val, "Unit": r.unit, "Form": r.form,
                             "Filed": r.filed.date(), "Accession": r.accn})
     return values, pd.DataFrame(sources)
@@ -235,6 +372,8 @@ def shares_outstanding(df, values, cols, ltm):
 
 def load_financials(facts, ticker, name, years=5, overrides=None):
     df = facts_to_df(facts)
+    splits = split_events(df)
+    df = adjust_for_splits(df, splits)
     currency = reporting_currency(df)
     maps = company_maps(overrides)
     all_maps = [row for m in maps for row in m]
@@ -260,7 +399,8 @@ def load_financials(facts, ticker, name, years=5, overrides=None):
                       sources=src, shares_out=shares_outstanding(df, values, cols, ltm),
                       currency=currency, maps=maps, annual_form=form,
                       taxonomy=annual["ns"].value_counts().idxmax() if not annual.empty else "us-gaap",
-                      ytd=ytd, ytd_months=ytd_months, dilution=dilution_facts(df, cols[-1], currency))
+                      ytd=ytd, ytd_months=ytd_months, dilution=dilution_facts(df, cols[-1], currency),
+                      fy_names=fiscal_year_names(df, cols), splits=splits)
 
 
 # --------------------------------------------------------------------------

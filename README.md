@@ -213,6 +213,9 @@ scenario and a probability-weighted target across Bear, Base and Bull.
   listed in the console. The previous file is copied to `backups/` first. Tabs you add yourself are not carried.
 - **Scenarios.** The Scenario dropdown on Inputs switches the whole model. A workbook shows one scenario at a
   time; the roll-up reads all three and applies the probabilities set on the Scenarios tab.
+- **Stock splits and fiscal years.** Share counts and per-share figures from before a split are restated in
+  today's shares (the build lists the splits it found; the Raw tab marks restated figures). Fiscal years carry
+  the company's own name: NVIDIA's year ending January 2026 is FY2026.
 - **Year one uses reported results.** When a 10-Q is newer than the last 10-K, the first forecast year is the
   months already reported plus a forecast for the rest.
 - **PEG.** The fair P/E is the target PEG (default 1.0) times the forecast's yearly EPS growth in percent, over

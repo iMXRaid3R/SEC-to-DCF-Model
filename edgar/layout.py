@@ -547,10 +547,11 @@ def fy_year(end):
 
 
 class Grid:
-    def __init__(self, fy_ends, ltm_end, n_fcst, ytd_months=0):
+    def __init__(self, fy_ends, ltm_end, n_fcst, ytd_months=0, names=None):
+        name = lambda e: (names or {}).get(e) or fy_year(e)     # the company's own fiscal year, else the date rule
         self.cols, j = [], 2
         for e in fy_ends:
-            self.cols.append(Col("hist", f"FY{fy_year(e)}A", e, j))
+            self.cols.append(Col("hist", f"FY{name(e)}A", e, j))
             j += 1
         if ltm_end is not None:
             self.cols.append(Col("ltm", f"LTM {ltm_end:%b-%y}", ltm_end, j))
@@ -558,7 +559,7 @@ class Grid:
             if ytd_months:
                 self.cols.append(Col("ytd", f"YTD {ytd_months}M", ltm_end, j))
                 j += 1
-        base = fy_year(fy_ends[-1])
+        base = name(fy_ends[-1])
         for k in range(1, n_fcst + 1):
             self.cols.append(Col("fcst", f"FY{base + k}E", None, j))
             j += 1

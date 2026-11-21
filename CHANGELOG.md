@@ -3,6 +3,17 @@
 To move from an older version, see "Upgrading from an older version" in the README: update the code, then
 rebuild your workbooks (`./run --list all`). Your typed inputs carry over.
 
+## 2026-11-21
+
+- **Stock splits.** Years reported only before a split kept their pre-split share counts and earnings per share,
+  so NVIDIA's history showed a tenfold jump in shares. Splits are now found in the filings (a later filing that
+  restates both the share count and EPS of an earlier period by the same ratio) and older figures restated in
+  today's shares. The build lists each split; the Raw tab marks every restated figure.
+- **Fiscal years are named the way the company names them.** NVIDIA's year ending January 2026 is now FY2026
+  (it was FY2025). Companies whose year ends in March to December are unchanged. Inputs typed for a particular
+  year move with it when you rebuild.
+- A company whose filings contain a mistyped date (Oracle, for one) no longer fails to build.
+
 ## 2026-11-20
 
 ### Using it

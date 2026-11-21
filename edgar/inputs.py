@@ -87,6 +87,35 @@ def _registered_edits(old):
     return out
 
 
+_YEAR_TABS = ("Income Statement", "Equity Model")     # tabs with period-end dates in row 3 over FY headers in row 4
+
+
+def _fy_by_end(wb):
+    """Period end (date) -> the year in its FY....A header, read from the first statement tab."""
+    for name in _YEAR_TABS:
+        if name in wb.sheetnames:
+            ws, out = wb[name], {}
+            for c in range(2, ws.max_column + 1):
+                end, head = ws.cell(row=3, column=c).value, ws.cell(row=4, column=c).value
+                m = re.fullmatch(r"FY(\d{4})A", str(head or ""))
+                if m and isinstance(end, (date, datetime)):
+                    out[end.date() if isinstance(end, datetime) else end] = int(m.group(1))
+            return out
+    return {}
+
+
+def year_shift(old, new):
+    """How many years the fiscal-year labels moved between two builds of the same company (1 for a workbook
+    that called NVIDIA's year ending January 2026 FY2025 and is now rebuilt as FY2026), else 0."""
+    a, b = _fy_by_end(old), _fy_by_end(new)
+    shifts = {b[e] - a[e] for e in a.keys() & b.keys()}
+    return shifts.pop() if len(shifts) == 1 else 0
+
+
+def _shift_key(key, n):
+    return re.sub(r"FY(\d{4})([AE])", lambda m: f"FY{int(m.group(1)) + n}{m.group(2)}", key) if n else key
+
+
 LEGACY_DCF = ("Risk-free rate", "Equity risk premium", "Beta", "Pre-tax cost of debt", "Terminal growth",
               "Exit EV/EBITDA multiple", "Mid-year convention (1 = on)")
 LEGACY_DCF_DEFAULTS = (0.0425, 0.055, 1.0, 0.05, 0.025, 15.0, 1)
@@ -130,6 +159,11 @@ def carry_over(old_path, wb, reg, reset=()):
     except Exception as e:                                   # unreadable file: build fresh, say so
         return [], [("(whole file)", f"could not read {Path(old_path).name}: {e}")], []
     edits = _registered_edits(old) if SHEET in old.sheetnames else _legacy_edits(old)
+    shift = year_shift(old, wb)          # year labels renamed: an override typed for a year follows that year
+    edits = {_shift_key(k, shift): v for k, v in edits.items()}
+    if shift:
+        print(f"  Fiscal years are now labelled as the company names them ({shift:+d} year); "
+              "inputs typed for a year moved with it")
     kept, dropped, parked = [], [], []
     for key, (v, old_sheet, old_addr) in edits.items():
         if any(w.lower() in key.lower() for w in reset):

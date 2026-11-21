@@ -34,7 +34,7 @@ import argparse
 import json
 import sys
 import time
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from edgar import parts as parts_mod
@@ -108,6 +108,11 @@ def build_one(a, ticker, peers, out=None, quiet=False):
             raise EdgarError(f"--since: no file {a.since}")
         print(f"Comparing {Path(a.since).name} with today's SEC data (nothing is built or saved):")
         return report_changes(fin, a.since)
+    for f, after, by in fin.splits or ():
+        if by >= fin.cols[0] - timedelta(days=400):           # one that touches the years shown
+            ratio = f"{f:.0f}-for-1" if f >= 1.5 else f"1-for-{1 / f:.0f} (reverse)"
+            print(f"  Stock split {ratio} between {after.date()} and {by.date()}: earlier share counts and "
+                  "per-share figures are restated to today's shares")
     fin.adr_ratio = a.adr.get(ticker, 1)
     fin.brand = a.brands.get(ticker) if a.use_brand else None
     erp = a.erp.get("by_ticker", {}).get(ticker, a.erp.get("default"))

@@ -32,7 +32,8 @@ class Model:
 
     def __init__(self, fin, n_fcst, ytd=True):
         self.fin = fin
-        self.grid = Grid(fin.cols, fin.ltm_end, n_fcst, fin.ytd_months if fin.ytd and ytd else 0)
+        self.grid = Grid(fin.cols, fin.ltm_end, n_fcst, fin.ytd_months if fin.ytd and ytd else 0,
+                         getattr(fin, "fy_names", None))
         self.settings = {}      # DCF settings (label, default, note, options) shown on the Inputs tab
         self.data = {}      # label -> {column index: value}
         self.reg = Registry()   # every input cell, so a rebuild can keep what the user typed

@@ -778,3 +778,68 @@ def test_history_and_forecast_years_are_chosen_and_remembered():
     assert P.years(8, None, remembered=(6, 12)) == (8, 12)               # asked-for wins, else what it had
     assert P.years(None, None, default=(7, 15)) == (7, 15)               # watchlist.json default
     assert P.years(40, 1) == (15, 3)                                      # held inside the allowed ranges
+
+
+# ---- stock splits and fiscal-year names ------------------------------------
+def test_splits_are_found_and_history_restated():
+    from edgar.transform import facts_to_df, split_events
+    found = lambda t: [(f, a.year) for f, a, _ in split_events(facts_to_df(load_json(FIXTURES / f"{t}.json.gz")))]
+    assert found("AAPL") == [(7.0, 2014), (4.0, 2020)]
+    assert found("ISRG") == [(3.0, 2017), (3.0, 2021)]
+    assert found("KO") == [(2.0, 2012)]
+    assert found("COST") == []
+    # ISRG's 3-for-1 split in October 2021: years reported only before it are restated, so 2018-2025 is smooth
+    f = fin_for("ISRG", years=8)
+    sh = [f.values["Diluted Shares"][c] for c in f.cols]
+    assert all(0.9 < b / a < 1.1 for a, b in zip(sh, sh[1:])), sh
+    assert round(fy_value(f, "Diluted EPS", "2018-12-31"), 2) == round(9.49 / 3, 2)    # $9.49 as first reported
+
+
+def test_a_share_count_restated_alone_is_not_a_split():
+    from edgar.transform import split_events
+    t = pd.Timestamp
+    rows = []
+    for filed, scale in (("2020-02-01", 1), ("2021-02-01", 1000)):        # a scale error in one filing
+        rows.append({"ns": "us-gaap", "tag": "WeightedAverageNumberOfDilutedSharesOutstanding", "unit": "shares",
+                     "start": t("2019-01-01"), "end": t("2019-12-31"), "val": 5e8 * scale, "filed": t(filed),
+                     "form": "10-K", "accn": filed})
+        rows.append({"ns": "us-gaap", "tag": "EarningsPerShareDiluted", "unit": "USD/shares",
+                     "start": t("2019-01-01"), "end": t("2019-12-31"), "val": 2.0, "filed": t(filed),
+                     "form": "10-K", "accn": filed})
+    assert split_events(pd.DataFrame(rows)) == []
+
+
+def test_fiscal_years_are_named_as_the_company_does():
+    from edgar.layout import Grid
+    from edgar.transform import fiscal_year_names
+    t = pd.Timestamp
+    ends = [t("2024-01-28"), t("2025-01-26"), t("2026-01-25")]
+
+    def names(offset):                            # 10-Ks whose "fy" is the end year + offset
+        df = pd.DataFrame([{"ns": "us-gaap", "form": "10-K", "days": 364, "fp": "FY", "end": e,
+                            "fy": e.year + offset, "filed": e + pd.Timedelta(days=30)} for e in ends])
+        return fiscal_year_names(df, ends)
+    assert list(names(0).values()) == [2024, 2025, 2026]       # NVIDIA: year ending Jan 2026 is fiscal 2026
+    assert list(names(-1).values()) == [2023, 2024, 2025]      # Target: ... is fiscal 2025 (the date rule)
+    g = Grid(ends, None, 3, names=names(0))
+    assert [c.header for c in g.cols] == ["FY2024A", "FY2025A", "FY2026A", "FY2027E", "FY2028E", "FY2029E"]
+    assert [c.header for c in Grid(ends, None, 1).cols][-2:] == ["FY2025A", "FY2026E"]   # no names: date rule
+    aapl = fin_for("AAPL")
+    assert aapl.fy_names[aapl.cols[-1]] == 2026                  # September year end: unchanged
+
+
+def test_inputs_follow_their_year_when_labels_move():
+    from datetime import date
+    from openpyxl import Workbook
+    from edgar.inputs import _shift_key, year_shift
+
+    def wb(year):
+        w = Workbook()
+        ws = w.active
+        ws.title = "Income Statement"
+        ws["B3"], ws["B4"] = date(2026, 1, 25), f"FY{year}A"
+        return w
+    assert year_shift(wb(2025), wb(2026)) == 1
+    assert year_shift(wb(2026), wb(2026)) == 0
+    assert _shift_key("Live|Revenue growth|FY2027E", 1) == "Live|Revenue growth|FY2028E"
+    assert _shift_key("DCF|Terminal growth", 1) == "DCF|Terminal growth"
