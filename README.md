@@ -35,12 +35,12 @@ the tool produces, not a view on the stock. More tabs: [Inputs](docs/inputs.jpg)
 ## Setup
 
 1. Install [uv](https://docs.astral.sh/uv/). It fetches Python and the packages the first time you run.
-2. Run `./run --setup` (Git Bash) or `run --setup` (cmd / PowerShell). It asks for the contact email the SEC
+2. Run `./run --setup` in Git Bash (`.\run.bat --setup` in PowerShell, `run --setup` in cmd). It asks for the contact email the SEC
    requires with every request and saves it in `.edgar_email`, and creates `watchlist.json` from the example.
    Both files are git-ignored, so they stay on your computer.
 3. Edit `watchlist.json`: your holdings and watchlist, each company's peers for the Comps tab, and optionally
    brand colours. A ticker that isn't listed still builds, just without peers.
-4. Run `./run` (or `run`, or double-click `run.bat`) for the menu, pick "Build or update a company", and open the
+4. Run `./run` (PowerShell: `.\run.bat`; or double-click `run.bat`) for the menu, pick "Build or update a company", and open the
    workbook it makes in Excel. `./run NVDA` does the same in one step.
 
 On a Mac or Linux, run `chmod +x run` once, then use `./run`. Building workbooks works there; `--rollup` and
@@ -70,7 +70,7 @@ before using those. The whole list of changes is in [CHANGELOG.md](CHANGELOG.md)
 
 ## The menu
 
-Run `./run` (or `run`, or double-click `run.bat`) with nothing after it for a menu: build a company and pick
+Run `./run` (PowerShell: `.\run.bat`; or double-click `run.bat`) with nothing after it for a menu: build a company and pick
 its parts, build a watchlist group, roll up the portfolio, write a one-page summary, or see what changed. Each
 choice prints the command it runs, so you can type it directly next time.
 
@@ -98,7 +98,9 @@ typed on a tab you switch off are kept in the workbook and return when you switc
 
 ## Everyday commands
 
-Run these from the project folder. In Git Bash use `./run`; in cmd or PowerShell use `run`.
+Run these from the project folder. They are written for Git Bash (and Mac / Linux): `./run`. In PowerShell
+type `.\run.bat` instead of `./run` (PowerShell doesn't run files from the current folder by their bare name),
+and in cmd just `run`.
 
 | Command | What it does |
 |---|---|

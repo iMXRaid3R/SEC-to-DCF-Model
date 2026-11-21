@@ -1,4 +1,4 @@
-"""The menu shown when the script runs with no arguments (./run, run, or double-clicking run.bat).
+"""The menu shown when the script runs with no arguments (./run, .\\run.bat in PowerShell, or double-clicking run.bat).
 
 Each choice is turned into the same command-line arguments you could type yourself, and the command is shown
 before it runs, so the menu doubles as a way to learn the shortcuts."""
