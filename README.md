@@ -38,8 +38,10 @@ the tool produces, not a view on the stock. More tabs: [Inputs](docs/inputs.jpg)
 2. Run `./run --setup` (Git Bash) or `run --setup` (cmd / PowerShell). It asks for the contact email the SEC
    requires with every request and saves it in `.edgar_email`, and creates `watchlist.json` from the example.
    Both files are git-ignored, so they stay on your computer.
-3. Run `./run NVDA` and open `NVDA_financials.xlsx` in Excel.
-4. Edit `watchlist.json` to list your own tickers and peers.
+3. Edit `watchlist.json`: your holdings and watchlist, each company's peers for the Comps tab, and optionally
+   brand colours. A ticker that isn't listed still builds, just without peers.
+4. Run `./run` (or `run`, or double-click `run.bat`) for the menu, pick "Build or update a company", and open the
+   workbook it makes in Excel. `./run NVDA` does the same in one step.
 
 On a Mac or Linux, run `chmod +x run` once, then use `./run`. Building workbooks works there; `--rollup` and
 `--writeup` read values through Excel on Windows, so they are Windows-only.

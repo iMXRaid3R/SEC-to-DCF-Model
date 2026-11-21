@@ -218,8 +218,8 @@ def setup(a):
     elif example.exists():
         WATCHLIST.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
         print("Created watchlist.json from the example: edit it to list your own tickers and peers")
-    print("\nReady. Try:   ./run NVDA        (builds NVDA_financials.xlsx; open it in Excel)\n"
-          "Then:        ./run --list holdings   and   ./run --rollup")
+    print("\nReady. Next: edit watchlist.json (your tickers and their peers), then run   ./run   for the menu.\n"
+          "Or directly:  ./run NVDA   (builds NVDA_financials.xlsx),  ./run --list holdings,  ./run --rollup")
 
 
 def _parts_arg(text):
