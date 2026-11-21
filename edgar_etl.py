@@ -7,19 +7,19 @@ P/FCF), Comps and Revenue Build.
 
 Usage:
     python edgar_etl.py                                      # the menu
-    python edgar_etl.py ISRG --statements-only               # the core model only, no valuation tabs
-    python edgar_etl.py ISRG --no-dcf --no-revenue-build     # leave parts out (remembered on rebuild)
+    python edgar_etl.py NVDA --statements-only               # the core model only, no valuation tabs
+    python edgar_etl.py NVDA --no-dcf --no-revenue-build     # leave parts out (remembered on rebuild)
     pip install requests pandas openpyxl        (or prefix commands with: uv run --with requests --with pandas --with openpyxl)
-    python edgar_etl.py ISRG                                 # peers come from watchlist.json when listed there
-    python edgar_etl.py ISRG --peers SYK MDT BSX             # choose the peers for the Comps tab
+    python edgar_etl.py NVDA                                 # peers come from watchlist.json when listed there
+    python edgar_etl.py NVDA --peers AVGO AMD INTC           # choose the peers for the Comps tab
     python edgar_etl.py MSFT --years 8 --forecast-years 7 --out msft.xlsx
     python edgar_etl.py --list holdings                      # build every ticker in a watchlist.json group
-    python edgar_etl.py --comps ISRG SYK MDT BSX             # standalone comps table
-    python edgar_etl.py ISRG --find accrued                  # list the company's tags to fill a "not reported" line
+    python edgar_etl.py --comps NVDA AVGO AMD INTC           # standalone comps table
+    python edgar_etl.py NVDA --find accrued                  # list the company's tags to fill a "not reported" line
     python edgar_etl.py --rollup                             # Portfolio.xlsx + valuation_log.csv from the built workbooks
     python edgar_etl.py --fetch all                          # only download (tickers or watchlist.json groups, plus peers)
-    python edgar_etl.py AAPL --refresh                       # ignore today's cached download
-    python edgar_etl.py AAPL --offline                       # use ./cache as it is, no download
+    python edgar_etl.py NVDA --refresh                       # ignore today's cached download
+    python edgar_etl.py NVDA --offline                       # use ./cache as it is, no download
 
 Rebuilding over an existing workbook keeps what you typed: scenario inputs, per-year overrides, DCF inputs,
 segment revenue, price overrides. The old file is first copied to ./backups. Use --fresh to start clean.
@@ -218,7 +218,7 @@ def setup(a):
     elif example.exists():
         WATCHLIST.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
         print("Created watchlist.json from the example: edit it to list your own tickers and peers")
-    print("\nReady. Try:   ./run AAPL        (builds AAPL_financials.xlsx; open it in Excel)\n"
+    print("\nReady. Try:   ./run NVDA        (builds NVDA_financials.xlsx; open it in Excel)\n"
           "Then:        ./run --list holdings   and   ./run --rollup")
 
 
@@ -246,7 +246,7 @@ def open_file(path):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("ticker", nargs="?", help="Ticker, e.g. AAPL")
+    p.add_argument("ticker", nargs="?", help="Ticker, e.g. NVDA")
     p.add_argument("--email", default=DEFAULT_EMAIL,
                    help="Your email (SEC User-Agent requirement; default: .edgar_email file or EDGAR_EMAIL)")
     p.add_argument("--years", type=int, metavar="N",

@@ -241,7 +241,7 @@ def write_multiples(ws, m):
     c.number_format = st.FMT["pct"]
     ws.conditional_formatting.add(f"A{first}:{L('upside')}{lastr}",
                                   FormulaRule(formula=[f'${L("use")}{first}="Off"'], font=st.font(st.GREY, italic=True)))
-    widths = {"A": 40, "B": 16, "C": 14, "D": 14, "E": 13, "F": 11, "G": 11, "H": 11, "I": 9, "J": 12, "K": 14,
+    widths = {"A": 40, "B": 16, "C": 14, "D": 14, "E": 21, "F": 11, "G": 11, "H": 11, "I": 9, "J": 12, "K": 14,
               "L": 12, "M": 10, "N": 7, "O": 110}
     for col, w in widths.items():
         ws.column_dimensions[col].width = w

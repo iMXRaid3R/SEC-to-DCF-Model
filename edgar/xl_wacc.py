@@ -117,7 +117,7 @@ def write_wacc(ws, m):
     # ---- weights at market value
     st.section(ws, W["cap_title"], 1, 6, "Capital structure at market value")
     calc("price", "Share price", f"=N({last.market('Share price')})", "price", "Inputs tab")
-    calc("shares", "Diluted shares", f"=N({last.market('Diluted shares')})", "shares", "Inputs tab")
+    calc("shares", "Diluted shares", f"=N({last.market('Diluted shares')})", "shares", "Bridge tab")
     calc("equity", "Equity value (market cap)", f"={B('price')}*{B('shares')}", "usd")
     from . import xl_bridge as br
     calc("debt", "Debt", f"={br.ref('debt')}", "usd",

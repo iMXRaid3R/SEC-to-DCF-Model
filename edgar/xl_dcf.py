@@ -254,10 +254,11 @@ def write_dcf(ws, m, calc):
     _reverse(ws, m, B, V, first_L, last_L, N, nopat_n, calc)
 
     _results(ws)
-    ws.column_dimensions["A"].width = 40
+    ws.column_dimensions["A"].width = 50
     for j in range(2, max(16, 3 + n)):
         ws.column_dimensions[get_column_letter(j)].width = 23 if j == 2 else 15 if j < 3 + n else 12
     ws.column_dimensions["I"].width = max(ws.column_dimensions["I"].width or 0, 15)
+    ws.column_dimensions["C"].width = 23          # Default column: room for the method choices' names
     ws.freeze_panes = "B4"
 
 

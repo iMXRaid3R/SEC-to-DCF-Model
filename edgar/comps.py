@@ -222,7 +222,7 @@ def write_comps(rows, ws, subject=None, price_ref=None, reg=None):
                 c.value = f'=IFERROR({fn}({rng}),"")'
                 c.number_format, c.font = st.FMT[fmt], st.font(bold=True)
                 c.fill = st.PatternFill("solid", fgColor=st.THEME["pale"])
-    ws.row_dimensions[row_of["Company"]].height = 30
+    ws.row_dimensions[row_of["Company"]].height = 45      # long names wrap to three lines
     if subject:
         for rr in row_of.values():
             ws[f"{cols[0]}{rr}"].fill = st.PatternFill("solid", fgColor="F3F4F6")    # the subject, set apart
@@ -232,6 +232,8 @@ def write_comps(rows, ws, subject=None, price_ref=None, reg=None):
     for col, row in zip(cols, rows):
         c = ws[f"{col}{notes_row}"]
         c.value, c.font, c.alignment = row["Notes"] or None, st.NOTE_FONT, st.Alignment(wrap_text=True, vertical="top")
+    if any(row["Notes"] for row in rows):
+        ws.row_dimensions[notes_row].height = 30
 
     medians = {h: f"Comps!${med_col}${row_of[h]}" for h in ("EV / Revenue", "EV / EBITDA", "P / E", "Rev growth",
                                                              "Gross margin", "EBIT margin", "EBITDA margin",

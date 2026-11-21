@@ -618,5 +618,6 @@ def write_banners(wb, m):
             j += 1
             if width >= need and j > used + 1:
                 break
-        c = ws.cell(row=1, column=j, value=formula)
+        c = ws.cell(row=1, column=j, value=formula if name != "Drivers" else
+                    "=" + '&"      |      "&'.join(pieces[1:]))
         c.font = st.font("1E5C4F", True)

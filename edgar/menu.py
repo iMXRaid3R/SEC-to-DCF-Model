@@ -106,7 +106,7 @@ def menu(main):
                 return
             wl = _watchlist()
             if choice == "1":
-                ticker = _ask("Ticker (e.g. AAPL): ").upper()
+                ticker = _ask("Ticker (e.g. NVDA): ").upper()
                 if not ticker:
                     continue
                 path = ROOT / f"{ticker}_financials.xlsx"

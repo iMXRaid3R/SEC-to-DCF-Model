@@ -178,7 +178,6 @@ def write_assumptions(ws, m, wss):
         ws[label_addr].alignment = Alignment(horizontal="right")
         c = ws[addr.replace("$", "")]
         c.value, c.font, c.alignment = f"={input_ref(key)}", st.font(st.GREEN, True), st.CENTER
-    st.link_to(ws["K1"], SHEET_NAMES["INP"], f"B{INPUT_ROWS['Scenario']}", "(change on the Inputs tab)")
     for title, hr in g.driver_headings.items():
         st.header_cell(ws.cell(row=hr, column=1), title, "ltm")
         ws.cell(row=hr, column=1).alignment = Alignment(horizontal="left")
@@ -324,7 +323,7 @@ def write_assumptions(ws, m, wss):
         ws.cell(row=v + 1, column=j).alignment = Alignment(horizontal="center", wrap_text=True)
         c = ws.cell(row=v + 2, column=j, value=f'=IF({target}="","",{target})')
         c.number_format, c.font = st.FMT[fmt], st.font(bold=True)
-    ws.row_dimensions[v + 1].height = 30
+    ws.row_dimensions[v + 1].height = 45
 
     # ---- per-year overrides: one row per driver, same columns as the driver rows at the top
     yt = g.year_ovr_title
@@ -370,6 +369,7 @@ def _scenarios_top(wss, m):
              value="Used by the portfolio roll-up and the write-up for a probability-weighted value and target "
                    "(the workbook shows one scenario at a time)").font = st.NOTE_FONT
     wss["F4"], wss["F4"].font = "Scenario in use:", st.font(bold=True)
+    wss["F4"].alignment = Alignment(horizontal="right")
     wss["G4"] = f"={input_ref('Scenario')}"
     wss["G4"].font = st.font(st.GREEN, True)
     st.link_to(wss["H4"], SHEET_NAMES["INP"], f"B{INPUT_ROWS['Scenario']}", "(change on the Inputs tab)")

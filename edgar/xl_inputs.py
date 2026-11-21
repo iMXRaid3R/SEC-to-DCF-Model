@@ -58,7 +58,7 @@ def write_inputs(ws, m):
 
     # ---- Scenario
     put("Scenario", "Scenario", "Base", kind="input", options=SCENARIOS, reg=("Control", "Scenario"), bold=True,
-        note="Which case drives the whole model. Bear / Base / Bull inputs are in the table on the Drivers tab")
+        note="Which case drives the whole model. Bear / Base / Bull inputs are on the Scenarios tab")
     put("Basis", "Base case starts from", BASIS_OPTIONS[0], kind="input", options=BASIS_OPTIONS,
         reg=("Control", "Basis"), note="History the Base year-1 drivers are taken from: 3-year average, last "
                                        "fiscal year, or last twelve months")

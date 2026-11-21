@@ -643,7 +643,8 @@ def test_settings_are_typed_where_they_act_and_listed_on_inputs(fins):
     # a results line on every tab with inputs
     for name in ("Inputs", "Drivers", "DCF", "Multiples", "Revenue Build"):
         row1 = [c.value for c in wb[name][1] if isinstance(c.value, str)]
-        assert any("Price target" in v and "Scenario" in v for v in row1), name
+        assert any("Price target" in v for v in row1), name
+        assert any("Scenario" in v for v in row1), name       # Drivers shows it in its own cell (F1)
 
 
 def test_financials_template_keeps_its_settings_on_inputs(fins):

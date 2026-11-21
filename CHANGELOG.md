@@ -58,6 +58,9 @@ rebuild your workbooks (`./run --list all`). Your typed inputs carry over.
 ### Fixes
 - Default formulas saved by Excel (e.g. `20.0` written back as `20`) are no longer mistaken for your edits.
 - The launcher works on Mac and Linux; tests run on GitHub on every push.
+- Layout: labels no longer cut off on the Scenarios, Multiples, DCF and Comps tabs; the Drivers tab's top row
+  no longer repeats the scenario; notes that still pointed to the old tabs now name Scenarios and Bridge.
+- README screenshots now show NVIDIA in the current layout; examples in the menu and help use NVDA.
 
 ## 2026-11-16
 

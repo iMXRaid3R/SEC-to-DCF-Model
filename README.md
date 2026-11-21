@@ -22,11 +22,12 @@ This is a personal research tool. Its output is a starting point for your own as
 
 ![Summary tab](docs/summary.jpg)
 
-![Value per share by method](docs/football-field.jpg)
+![Range of values and revenue chart](docs/football-field.jpg)
 
-The screenshots show Apple built with default settings, not a view on the stock, in an earlier layout (the
-Summary is now a dashboard and the tabs have a title bar in the company's colour). More: [Inputs](docs/inputs.jpg),
-[Drivers](docs/drivers.jpg), [DCF](docs/dcf.jpg).
+NVIDIA built with default settings and its brand colour, priced at the close of 20 November 2026. It shows what
+the tool produces, not a view on the stock. More tabs: [Inputs](docs/inputs.jpg), [Scenarios](docs/scenarios.jpg),
+[Drivers](docs/drivers.jpg), [WACC](docs/wacc.jpg), [DCF](docs/dcf.jpg), [Multiples](docs/multiples.jpg),
+[Comps](docs/comps.jpg).
 
 **Used an earlier version?** See [Upgrading from an older version](#upgrading-from-an-older-version) and
 [CHANGELOG.md](CHANGELOG.md). Nothing needs reinstalling.
@@ -37,7 +38,7 @@ Summary is now a dashboard and the tabs have a title bar in the company's colour
 2. Run `./run --setup` (Git Bash) or `run --setup` (cmd / PowerShell). It asks for the contact email the SEC
    requires with every request and saves it in `.edgar_email`, and creates `watchlist.json` from the example.
    Both files are git-ignored, so they stay on your computer.
-3. Run `./run AAPL` and open `AAPL_financials.xlsx` in Excel.
+3. Run `./run NVDA` and open `NVDA_financials.xlsx` in Excel.
 4. Edit `watchlist.json` to list your own tickers and peers.
 
 On a Mac or Linux, run `chmod +x run` once, then use `./run`. Building workbooks works there; `--rollup` and
@@ -100,17 +101,17 @@ Run these from the project folder. In Git Bash use `./run`; in cmd or PowerShell
 | Command | What it does |
 |---|---|
 | `./run` | The menu |
-| `./run ISRG` | Build or rebuild `ISRG_financials.xlsx` (add `--open` to open it in Excel afterwards) |
-| `./run ISRG --statements-only` | The core model only, no valuation tabs |
+| `./run NVDA` | Build or rebuild `NVDA_financials.xlsx` (add `--open` to open it in Excel afterwards) |
+| `./run NVDA --statements-only` | The core model only, no valuation tabs |
 | `./run --list holdings` | Build every ticker in a `watchlist.json` group (`holdings`, `watchlist`, `all`) |
 | `./run --rollup` | Read every built workbook through Excel and write `Portfolio.xlsx` and `valuation_log.csv` |
 | `./run --rollup --base-only` | Same, Base scenario only (about a third of the time) |
-| `./run --writeup ISRG` | One-page Markdown summary in `writeups/`: values, scenarios, assumptions, your notes |
-| `./run ISRG --since backups/ISRG_financials_<date>.xlsx` | Show what changed between an older workbook and today's SEC data; builds nothing |
-| `./run ISRG --find accrued` | List the company's XBRL tags matching a word, to fill an empty line |
-| `./run ISRG --reset Beta` | Put a typed input back to its default |
+| `./run --writeup NVDA` | One-page Markdown summary in `writeups/`: values, scenarios, assumptions, your notes |
+| `./run NVDA --since backups/NVDA_financials_<date>.xlsx` | Show what changed between an older workbook and today's SEC data; builds nothing |
+| `./run NVDA --find accrued` | List the company's XBRL tags matching a word, to fill an empty line |
+| `./run NVDA --reset Beta` | Put a typed input back to its default |
 | `./run --fetch all` | Download data only, build nothing |
-| `./run --comps ISRG SYK MDT` | Standalone comparables table |
+| `./run --comps NVDA AVGO AMD` | Standalone comparables table |
 
 Other options: `--peers T1 T2`, `--parts LIST`, `--years N`, `--forecast-years N`, `--no-dcf`, `--no-multiples`, `--no-comps`, `--no-revenue-build`, `--template financial`,
 `--offline`, `--refresh`, `--fresh`. Run `./run --help` for the full list.
